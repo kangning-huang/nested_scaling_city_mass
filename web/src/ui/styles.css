@@ -1,0 +1,42 @@
+:root {
+  --border: #e6e8eb;
+  --muted: #616b74;
+  --bg: #f9fafb;
+  --primary: #1e5a9c;
+}
+
+body { background: var(--bg); color: #111; }
+
+button {
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+button:disabled { opacity: 0.6; cursor: default; }
+button:hover:not(:disabled) { border-color: #c9ced6; }
+
+.panel {
+  padding: 12px;
+}
+.panel h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.header {
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+  background: #fff;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.header .title { font-weight: 600; }
+.header .crumbs { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+.btn-group { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.btn-group button { border: 0; border-right: 1px solid var(--border); padding: 6px 10px; background: #fff; }
+.btn-group button:last-child { border-right: 0; }
+.btn-group button[disabled] { background: #f1f3f5; font-weight: 600; }

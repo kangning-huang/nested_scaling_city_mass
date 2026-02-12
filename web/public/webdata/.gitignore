@@ -1,0 +1,7 @@
+# Keep archives, ignore expanded contents
+*
+!/.gitignore
+!*.zip
+!countries.geojson
+!hex/
+!hex/.gitignore

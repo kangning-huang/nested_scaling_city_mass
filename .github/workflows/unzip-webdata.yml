@@ -1,0 +1,16 @@
+name: Unzip web data
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+jobs:
+  unzip:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Expand webdata archives
+        run: bash scripts/unzip_webdata.sh
