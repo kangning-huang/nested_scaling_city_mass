@@ -1,11 +1,10 @@
-import React, { useEffect, useMemo, useRef } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import maplibregl from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import { MapboxOverlay } from '@deck.gl/mapbox'
 import { H3HexagonLayer } from '@deck.gl/aggregation-layers'
 import { interpolateViridis } from 'd3-scale-chromatic'
 import * as h3 from 'h3-js'
-import React, { useState } from 'react'
 import { DATA_BASE } from '../config'
 
 const MAPTILER_KEY = import.meta.env.VITE_MAPTILER_KEY || 'YOUR_MAPTILER_KEY'
