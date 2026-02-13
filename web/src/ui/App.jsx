@@ -14,9 +14,10 @@ const App = () => {
     setCountryName(name || iso3)
     setCityName(null)
   }
-  const onSelectCity = (cityId, name) => {
-    setScope((s) => ({ level: 'city', iso: s.iso, cityId }))
-    setCityName(name || `City ${cityId}`)
+  const onSelectCity = (cityId, iso, cntryName) => {
+    setScope((s) => ({ level: 'city', iso: iso || s.iso, cityId }))
+    setCityName(`City ${cityId}`)
+    if (cntryName) setCountryName(cntryName)
   }
   const onReset = () => {
     setScope({ level: 'global' })

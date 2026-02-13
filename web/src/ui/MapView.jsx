@@ -18,9 +18,16 @@ const MapView = ({ scope, metric, onSelectCountry, onSelectCity }) => {
   const overlayRef = useRef(null)
   const hexDataRef = useRef([])
   const cityPointsRef = useRef({ type: 'FeatureCollection', features: [] })
+  const countriesDataRef = useRef(null)
+  const countryCityCountsRef = useRef({})
   const [legend, setLegend] = useState({ lo: null, hi: null })
   const [tooltip, setTooltip] = useState(null)
-  const [countryCityCounts, setCountryCityCounts] = useState({})
+
+  // Keep callback refs fresh to avoid stale closures in map event handlers
+  const onSelectCountryRef = useRef(onSelectCountry)
+  const onSelectCityRef = useRef(onSelectCity)
+  useEffect(() => { onSelectCountryRef.current = onSelectCountry }, [onSelectCountry])
+  useEffect(() => { onSelectCityRef.current = onSelectCity }, [onSelectCity])
 
   useEffect(() => {
     const map = new maplibregl.Map({
@@ -42,48 +49,97 @@ const MapView = ({ scope, metric, onSelectCountry, onSelectCity }) => {
       const cRes = await fetch(`${DATA_BASE}/countries.geojson`)
       if (cRes.ok) {
         const data = await cRes.json()
+        countriesDataRef.current = data
         map.addSource('countries', { type: 'geojson', data })
-        map.addLayer({ id: 'country-fill', type: 'fill', source: 'countries', paint: { 'fill-color': '#3a3a42', 'fill-opacity': 0.35 } })
-        map.addLayer({ id: 'country-outline', type: 'line', source: 'countries', paint: { 'line-color': '#5a5a65', 'line-width': 0.6 } })
+        map.addLayer({ id: 'country-fill', type: 'fill', source: 'countries', paint: { 'fill-color': '#3a3a42', 'fill-opacity': 0.15 } })
+        map.addLayer({ id: 'country-outline', type: 'line', source: 'countries', paint: { 'line-color': '#5a5a65', 'line-width': 0.6, 'line-opacity': 0.5 } })
         map.on('click', 'country-fill', (e) => {
-          const f = e.features?.[0]
-          if (!f) return
-          const iso3 = f.properties?.iso3
-          const name = f.properties?.name
-          if (iso3) onSelectCountry(iso3, name)
-          map.fitBounds(turfBbox(f), { padding: 30, duration: 600 })
+          const props = e.features?.[0]?.properties
+          const iso3 = props?.iso3
+          const name = props?.name
+          if (iso3) onSelectCountryRef.current(iso3, name)
         })
         map.on('mousemove', 'country-fill', (e) => {
           const f = e.features?.[0]
           if (!f) { setTooltip(null); return }
-          setTooltip({ type: 'country', x: e.point.x, y: e.point.y, iso: f.properties?.iso3, name: f.properties?.name })
+          const iso3 = f.properties?.iso3
+          const name = f.properties?.name
+          const count = (countryCityCountsRef.current[iso3] || []).length
+          setTooltip({ type: 'country', x: e.point.x, y: e.point.y, iso: iso3, name, count })
         })
         map.on('mouseleave', 'country-fill', () => setTooltip(null))
         map.on('mouseenter', 'country-fill', () => (map.getCanvas().style.cursor = 'pointer'))
         map.on('mouseleave', 'country-fill', () => (map.getCanvas().style.cursor = 'default'))
       }
 
-      // City points from index
-      const metaRes = await fetch(`${DATA_BASE}/index/city_meta.json`)
+      // City points from index + population data
+      const [metaRes, aggRes] = await Promise.all([
+        fetch(`${DATA_BASE}/index/city_meta.json`),
+        fetch(`${DATA_BASE}/cities_agg/global.json`)
+      ])
+
+      let popLookup = {}
+      if (aggRes.ok) {
+        const aggData = await aggRes.json()
+        for (const row of aggData) {
+          const id = row.city_id ?? row.ID_HDC_G0
+          const pop = row.pop_total ?? row.population_2015 ?? (row.log_pop ? Math.pow(10, row.log_pop) : 0)
+          if (id != null) popLookup[id] = pop
+        }
+      }
+
       if (metaRes.ok) {
         const meta = await metaRes.json()
         const features = Object.entries(meta).map(([cityId, m]) => {
-          return { type: 'Feature', geometry: { type: 'Point', coordinates: [m.lon, m.lat] }, properties: { city_id: parseInt(cityId), country_iso: m.country_iso, name: m.city } }
+          const pop = popLookup[parseInt(cityId)] || 0
+          return {
+            type: 'Feature',
+            geometry: { type: 'Point', coordinates: [m.lon, m.lat] },
+            properties: { city_id: parseInt(cityId), country_iso: m.country_iso, name: m.city, pop_total: pop }
+          }
         })
         cityPointsRef.current = { type: 'FeatureCollection', features }
         map.addSource('cities', { type: 'geojson', data: cityPointsRef.current })
         map.addLayer({
           id: 'city-pts', type: 'circle', source: 'cities',
-          paint: { 'circle-color': '#c8873a', 'circle-radius': 3, 'circle-opacity': 0.75, 'circle-stroke-color': 'rgba(200,135,58,0.3)', 'circle-stroke-width': 2 },
+          paint: {
+            'circle-color': '#c8873a',
+            'circle-radius': [
+              'interpolate', ['linear'],
+              ['case',
+                ['>', ['get', 'pop_total'], 0],
+                ['log10', ['get', 'pop_total']],
+                4
+              ],
+              4, 2,
+              5, 4,
+              6, 7,
+              7, 12
+            ],
+            'circle-opacity': 0.75,
+            'circle-stroke-color': 'rgba(200,135,58,0.3)',
+            'circle-stroke-width': 2,
+          },
         })
         map.on('click', 'city-pts', (e) => {
           const f = e.features?.[0]
-          if (f) onSelectCity(f.properties?.city_id, f.properties?.name)
+          const cid = f?.properties?.city_id
+          const iso = f?.properties?.country_iso
+          if (cid) {
+            const cntryName = countriesDataRef.current?.features?.find(
+              cf => cf.properties?.iso3 === iso
+            )?.properties?.name || iso
+            onSelectCityRef.current(cid, iso, cntryName)
+          }
         })
         map.on('mousemove', 'city-pts', (e) => {
           const f = e.features?.[0]
           if (!f) { setTooltip(null); return }
-          setTooltip({ type: 'city', x: e.point.x, y: e.point.y, name: f.properties?.name, city_id: f.properties?.city_id, iso: f.properties?.country_iso })
+          setTooltip({
+            type: 'city', x: e.point.x, y: e.point.y,
+            name: f.properties?.name, city_id: f.properties?.city_id,
+            iso: f.properties?.country_iso, pop: f.properties?.pop_total
+          })
         })
         map.on('mouseleave', 'city-pts', () => setTooltip(null))
         map.on('mouseenter', 'city-pts', () => (map.getCanvas().style.cursor = 'pointer'))
@@ -92,17 +148,43 @@ const MapView = ({ scope, metric, onSelectCountry, onSelectCity }) => {
 
       // Country→cities index
       const idxRes = await fetch(`${DATA_BASE}/index/country_to_cities.json`)
-      if (idxRes.ok) setCountryCityCounts(await idxRes.json())
+      if (idxRes.ok) {
+        const idx = await idxRes.json()
+        countryCityCountsRef.current = idx
+      }
     })
 
-    return () => { overlay.remove(); map.remove() }
+    return () => {
+      overlay.remove()
+      map.remove()
+      mapInstanceRef.current = null
+    }
   }, [])
+
+  // Zoom map when scope changes (handles breadcrumb navigation + country clicks)
+  useEffect(() => {
+    const map = mapInstanceRef.current
+    if (!map || !map.loaded()) return
+    if (scope.level === 'global') {
+      map.flyTo({ center: [0, 20], zoom: 1.3, duration: 600 })
+    } else if (scope.level === 'country' && countriesDataRef.current) {
+      const feat = countriesDataRef.current.features.find(f => f.properties?.iso3 === scope.iso)
+      if (feat) {
+        const bbox = turfBbox(feat)
+        map.fitBounds(bbox, { padding: 30, duration: 600 })
+      }
+    }
+    // city-level zoom is handled by the hex loading effect below
+  }, [scope.level, scope.iso])
 
   // Hex layer on city selection
   useEffect(() => {
     const overlay = overlayRef.current
     if (!overlay) return
-    if (scope.level !== 'city') { overlay.setProps({ layers: [] }); return }
+    if (scope.level !== 'city') {
+      overlay.setProps({ layers: [] })
+      return
+    }
     fetch(`${DATA_BASE}/hex/city=${scope.cityId}.json`)
       .then((r) => r.json())
       .then((rows) => {
@@ -112,29 +194,34 @@ const MapView = ({ scope, metric, onSelectCountry, onSelectCity }) => {
         renderHexLayer()
       })
       .catch(() => overlay.setProps({ layers: [] }))
-  }, [scope])
+  }, [scope.level, scope.cityId])
 
   // Recolor on metric change
-  useEffect(() => { if (scope.level === 'city') renderHexLayer() }, [metric])
+  useEffect(() => {
+    if (scope.level === 'city') renderHexLayer()
+  }, [metric])
 
   // Filter city points by country
   useEffect(() => {
     const map = mapInstanceRef.current
     if (!map || !map.getSource('cities')) return
-    if (scope.level === 'country' || scope.level === 'city') {
+    if (scope.level === 'country') {
       const filtered = { type: 'FeatureCollection', features: cityPointsRef.current.features.filter((f) => f.properties.country_iso === scope.iso) }
       map.getSource('cities').setData(filtered)
-    } else {
+    } else if (scope.level === 'global') {
       map.getSource('cities').setData(cityPointsRef.current)
     }
-  }, [scope])
+  }, [scope.level, scope.iso])
 
   const fitToPoints = (coords) => {
     if (!coords.length) return
-    const xs = coords.map((c) => c[0]), ys = coords.map((c) => c[1])
+    const xs = coords.map((c) => c[0])
+    const ys = coords.map((c) => c[1])
+    const minX = Math.min(...xs), maxX = Math.max(...xs)
+    const minY = Math.min(...ys), maxY = Math.max(...ys)
     const map = mapInstanceRef.current
-    if (map && isFinite(Math.min(...xs))) {
-      map.fitBounds([[Math.min(...xs), Math.min(...ys)], [Math.max(...xs), Math.max(...ys)]], { padding: 40, duration: 600 })
+    if (map && isFinite(minX)) {
+      map.fitBounds([[minX, minY], [maxX, maxY]], { padding: 40, duration: 600 })
     }
   }
 
@@ -142,7 +229,10 @@ const MapView = ({ scope, metric, onSelectCountry, onSelectCity }) => {
     const overlay = overlayRef.current
     if (!overlay) return
     const rows = hexDataRef.current
-    if (!rows?.length) { overlay.setProps({ layers: [] }); return }
+    if (!rows || !rows.length) {
+      overlay.setProps({ layers: [] })
+      return
+    }
     const vals = rows.map((d) => (metric === 'pop' ? d.population_2015 : d.total_built_mass_tons)).filter((v) => v > 0)
     const sorted = vals.sort((a, b) => a - b)
     const lo = sorted[Math.floor(sorted.length * 0.02)] || 1
@@ -214,13 +304,14 @@ const MapView = ({ scope, metric, onSelectCountry, onSelectCity }) => {
         <div className="map-tooltip" style={{ left: tooltip.x + 14, top: tooltip.y + 14 }}>
           <strong>{tooltip.name}</strong>
           <div className="tt-row"><span className="tt-label">Country</span><span className="tt-value">{tooltip.iso}</span></div>
+          {tooltip.pop > 0 && <div className="tt-row"><span className="tt-label">Population</span><span className="tt-value">{formatSI(tooltip.pop)}</span></div>}
         </div>
       )}
       {tooltip && tooltip.type === 'country' && (
         <div className="map-tooltip" style={{ left: tooltip.x + 14, top: tooltip.y + 14 }}>
           <strong>{tooltip.name}</strong>
           <div className="tt-row"><span className="tt-label">ISO</span><span className="tt-value">{tooltip.iso}</span></div>
-          <div className="tt-row"><span className="tt-label">Cities</span><span className="tt-value">{(countryCityCounts[tooltip.iso] || []).length}</span></div>
+          <div className="tt-row"><span className="tt-label">Cities</span><span className="tt-value">{tooltip.count}</span></div>
         </div>
       )}
     </div>
@@ -236,9 +327,19 @@ function formatSI(num) {
   return num.toFixed(0)
 }
 
+// Parse CSS color string to [r, g, b] array
+// Handles rgb(r,g,b), rgba(r,g,b,a), and hex (#rrggbb / #rgb) formats
 function cssToRgb(css) {
-  const c = css.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/)
-  return c ? [parseInt(c[1]), parseInt(c[2]), parseInt(c[3])] : [160, 160, 160]
+  if (!css) return [160, 160, 160]
+  const rgbMatch = css.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/)
+  if (rgbMatch) return [parseInt(rgbMatch[1]), parseInt(rgbMatch[2]), parseInt(rgbMatch[3])]
+  const hexMatch = css.match(/^#([0-9a-f]{3,8})$/i)
+  if (hexMatch) {
+    let hex = hexMatch[1]
+    if (hex.length === 3 || hex.length === 4) hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2]
+    return [parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16)]
+  }
+  return [160, 160, 160]
 }
 
 function turfBbox(feat) {
