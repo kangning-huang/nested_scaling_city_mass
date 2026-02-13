@@ -5,6 +5,7 @@ This repository contains the code and analysis pipeline for our manuscript on ne
 - **Status:** Under revision at *Nature Cities*
 - **Preprint:** [arXiv:2507.03960](https://arxiv.org/abs/2507.03960)
 - **Interactive explorer:** [https://kangning-huang.github.io/nested-scaling-city-mass/](https://kangning-huang.github.io/nested-scaling-city-mass/)
+- **Repository:** [https://github.com/kangning-huang/nested-scaling-city-mass](https://github.com/kangning-huang/nested-scaling-city-mass)
 
 ## Key Findings
 
@@ -34,21 +35,16 @@ nested_scaling_city_mass/
 │   │   ├── 06–10_*.py           # Zipf, simulation, Fig 4
 │   │   ├── sensitivity/         # Original mixed-effects sensitivity analyses
 │   │   └── utils/               # Shared path utilities
-│   ├── scaling_analysis/        # Revised scaling analysis (de-centering approach)
-│   │   ├── Fig2_*.R             # City-level scaling + sensitivity
-│   │   ├── Fig3_*.R             # Neighborhood-level scaling + sensitivity
-│   │   ├── extract_subway_mass_by_hexagon.py
-│   │   ├── test_zipf_vs_lognormal.py
-│   │   ├── test_rank_correlation.py
-│   │   └── web_prep/            # Scripts to prepare data for the interactive website
-│   ├── 01_data_extraction/      # POI download from OSM
-│   ├── 02_preprocessing/        # SNDi and CMI preprocessing
-│   ├── 03_analysis/             # Building vs mobility scaling, centrality
-│   └── hpc/                     # HPC scripts for OSRM routing
+│   └── scaling_analysis/        # Revised scaling analysis (de-centering approach)
+│       ├── Fig2_*.R             # City-level scaling + sensitivity
+│       ├── Fig3_*.R             # Neighborhood-level scaling + sensitivity
+│       ├── extract_subway_mass_by_hexagon.py
+│       ├── test_zipf_vs_lognormal.py
+│       ├── test_rank_correlation.py
+│       └── web_prep/            # Scripts to prepare data for the interactive website
 ├── web/                         # Interactive web explorer (React + MapLibre + deck.gl)
 ├── config/                      # Path configuration for multi-environment support
-├── tests/                       # Pipeline tests
-└── docs/                        # Session summaries and documentation
+└── tests/                       # Pipeline tests
 ```
 
 ---
@@ -196,21 +192,9 @@ Output: MasterMass_ByClass20250616.csv (3,588 cities)
 
 ### Stage 5: Scaling Analysis
 
-Two parallel analysis tracks produce the main results:
-
-#### Original Methodology (Mixed-Effects Normalization)
-
-**Scripts:** `scripts/data_pipeline/Fig2_UniversalScaling_MIUpdated.Rmd` and `Fig3_NeighborhoodScaling_UpdateMI.Rmd`
-
-Two-stage approach:
-1. Fit mixed-effects model: `log10(mass) ~ log10(pop) + (1|Country)` (city) or `+ (1|Country) + (1|Country:City)` (neighborhood)
-2. Extract random intercepts, normalize data, run OLS on normalized data
-
-#### Revised Methodology (De-centering)
-
 **Scripts:** `scripts/scaling_analysis/Fig2_UniversalScaling_Decentered.R` and `Fig3_NeighborhoodScaling_Decentered.R`
 
-Following Bettencourt & Lobo (2016), replace mixed-effects with simple within-group de-centering:
+Following Bettencourt & Lobo (2016), we use within-group de-centering to remove country/city baseline differences before pooled OLS:
 
 ```r
 # City-level: de-center by country mean
