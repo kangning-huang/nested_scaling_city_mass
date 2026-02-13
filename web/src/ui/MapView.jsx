@@ -7,7 +7,10 @@ import { interpolateViridis } from 'd3-scale-chromatic'
 import * as h3 from 'h3-js'
 import { DATA_BASE } from '../config'
 
-const MAPTILER_KEY = import.meta.env.VITE_MAPTILER_KEY || 'YOUR_MAPTILER_KEY'
+const MAPTILER_KEY = import.meta.env.VITE_MAPTILER_KEY
+const MAP_STYLE = MAPTILER_KEY
+  ? `https://api.maptiler.com/maps/dataviz-dark/style.json?key=${MAPTILER_KEY}`
+  : 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json'
 
 const MapView = ({ scope, metric, onSelectCountry, onSelectCity }) => {
   const containerRef = useRef(null)
@@ -22,7 +25,7 @@ const MapView = ({ scope, metric, onSelectCountry, onSelectCity }) => {
   useEffect(() => {
     const map = new maplibregl.Map({
       container: containerRef.current,
-      style: `https://api.maptiler.com/maps/dataviz-dark/style.json?key=${MAPTILER_KEY}`,
+      style: MAP_STYLE,
       center: [0, 20],
       zoom: 1.3,
     })
