@@ -36,7 +36,8 @@ const App = () => {
       <div className="panel panel-right">
         <div className="site-header">
           <div className="site-title">Nested Scaling of Urban Material Stocks</div>
-          <div className="site-subtitle">Population-mass scaling across cities and neighborhoods — <a href="https://arxiv.org/abs/2507.03960" target="_blank" rel="noopener noreferrer">arXiv:2507.03960</a></div>
+          <div className="site-subtitle">Kangning Huang, Paul Waddell, Tao Lin, Minda Ma, Hiroki Tanikawa, Helga Weisz, Fridolin Krausmann, Dominik Wiedenhofer</div>
+          <div className="site-subtitle">Urban material stocks scale sublinearly with population at both city and neighborhood levels, revealing a universal pattern of resource efficiency in larger urban systems. <a href="https://arxiv.org/abs/2507.03960" target="_blank" rel="noopener noreferrer">Read the preprint &rarr;</a></div>
           <div className="header-row">
             <div className="breadcrumbs">
               <span className={`crumb${scope.level === 'global' ? ' active' : ''}`} onClick={onReset}>Global</span>

@@ -3,14 +3,28 @@ import maplibregl from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import { MapboxOverlay } from '@deck.gl/mapbox'
 import { H3HexagonLayer } from '@deck.gl/geo-layers'
-import { interpolateViridis } from 'd3-scale-chromatic'
+import { interpolateViridis, interpolateInferno } from 'd3-scale-chromatic'
 import * as h3 from 'h3-js'
 import { DATA_BASE } from '../config'
+import { useTheme } from './useTheme.js'
 
 const MAPTILER_KEY = import.meta.env.VITE_MAPTILER_KEY
-const MAP_STYLE = MAPTILER_KEY
-  ? `https://api.maptiler.com/maps/dataviz-dark/style.json?key=${MAPTILER_KEY}`
-  : 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json'
+
+function getMapStyle(isDark) {
+  if (MAPTILER_KEY) {
+    return isDark
+      ? `https://api.maptiler.com/maps/dataviz-dark/style.json?key=${MAPTILER_KEY}`
+      : `https://api.maptiler.com/maps/dataviz-light/style.json?key=${MAPTILER_KEY}`
+  }
+  return isDark
+    ? 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json'
+    : 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json'
+}
+
+// Warm ramp for built mass (amber → red → dark)
+function colorMass(t) { return interpolateInferno(0.15 + t * 0.75) }
+// Cool ramp for population (teal → yellow → bright)
+function colorPop(t) { return interpolateViridis(t) }
 
 const MapView = ({ scope, metric, onSelectCountry, onSelectCity, onReset }) => {
   const containerRef = useRef(null)
@@ -22,6 +36,11 @@ const MapView = ({ scope, metric, onSelectCountry, onSelectCity, onReset }) => {
   const countryCityCountsRef = useRef({})
   const [legend, setLegend] = useState({ lo: null, hi: null })
   const [tooltip, setTooltip] = useState(null)
+  const metricRef = useRef(metric)
+  const { isDark } = useTheme()
+
+  // Keep metric ref current for DeckGL accessor closures
+  useEffect(() => { metricRef.current = metric }, [metric])
 
   // Keep callback refs fresh to avoid stale closures in map event handlers
   const onSelectCountryRef = useRef(onSelectCountry)
@@ -29,10 +48,11 @@ const MapView = ({ scope, metric, onSelectCountry, onSelectCity, onReset }) => {
   useEffect(() => { onSelectCountryRef.current = onSelectCountry }, [onSelectCountry])
   useEffect(() => { onSelectCityRef.current = onSelectCity }, [onSelectCity])
 
+  // Recreate map when theme changes
   useEffect(() => {
     const map = new maplibregl.Map({
       container: containerRef.current,
-      style: MAP_STYLE,
+      style: getMapStyle(isDark),
       center: [0, 20],
       zoom: 1.3,
     })
@@ -45,14 +65,18 @@ const MapView = ({ scope, metric, onSelectCountry, onSelectCity, onReset }) => {
     overlayRef.current = overlay
 
     map.on('load', async () => {
+      // Country fill/outline colors adapt to theme
+      const fillColor = isDark ? '#3a3a42' : '#c8c4bc'
+      const outlineColor = isDark ? '#5a5a65' : '#a8a49c'
+
       // Countries layer
       const cRes = await fetch(`${DATA_BASE}/countries.geojson`)
       if (cRes.ok) {
         const data = await cRes.json()
         countriesDataRef.current = data
         map.addSource('countries', { type: 'geojson', data })
-        map.addLayer({ id: 'country-fill', type: 'fill', source: 'countries', paint: { 'fill-color': '#3a3a42', 'fill-opacity': 0.15 } })
-        map.addLayer({ id: 'country-outline', type: 'line', source: 'countries', paint: { 'line-color': '#5a5a65', 'line-width': 0.6, 'line-opacity': 0.5 } })
+        map.addLayer({ id: 'country-fill', type: 'fill', source: 'countries', paint: { 'fill-color': fillColor, 'fill-opacity': 0.15 } })
+        map.addLayer({ id: 'country-outline', type: 'line', source: 'countries', paint: { 'line-color': outlineColor, 'line-width': 0.6, 'line-opacity': 0.5 } })
         map.on('click', 'country-fill', (e) => {
           const props = e.features?.[0]?.properties
           const iso3 = props?.iso3
@@ -160,7 +184,7 @@ const MapView = ({ scope, metric, onSelectCountry, onSelectCity, onReset }) => {
       map.remove()
       mapInstanceRef.current = null
     }
-  }, [])
+  }, [isDark])
 
   // Zoom map when scope changes (handles breadcrumb navigation + country clicks)
   useEffect(() => {
@@ -169,9 +193,10 @@ const MapView = ({ scope, metric, onSelectCountry, onSelectCity, onReset }) => {
     if (scope.level === 'global') {
       map.flyTo({ center: [0, 20], zoom: 1.3, duration: 600 })
     } else if (scope.level === 'country' && countriesDataRef.current) {
-      const feat = countriesDataRef.current.features.find(f => f.properties?.iso3 === scope.iso)
-      if (feat) {
-        const bbox = turfBbox(feat)
+      // Find ALL features matching this iso3 (e.g. CHN may have multiple polygons)
+      const matchingFeats = countriesDataRef.current.features.filter(f => f.properties?.iso3 === scope.iso)
+      if (matchingFeats.length > 0) {
+        const bbox = turfBboxMulti(matchingFeats)
         map.fitBounds(bbox, { padding: 30, duration: 600 })
       }
     }
@@ -230,30 +255,34 @@ const MapView = ({ scope, metric, onSelectCountry, onSelectCity, onReset }) => {
     const overlay = overlayRef.current
     if (!overlay) return
     const rows = hexDataRef.current
+    const m = metricRef.current
     if (!rows || !rows.length) {
       overlay.setProps({ layers: [] })
       return
     }
-    const vals = rows.map((d) => (metric === 'pop' ? d.population_2015 : d.total_built_mass_tons)).filter((v) => v > 0)
+    const isPop = m === 'pop'
+    const colorFn = isPop ? colorPop : colorMass
+    const vals = rows.map((d) => (isPop ? d.population_2015 : d.total_built_mass_tons)).filter((v) => v > 0)
     const sorted = vals.sort((a, b) => a - b)
     const lo = sorted[Math.floor(sorted.length * 0.02)] || 1
     const hi = sorted[Math.floor(sorted.length * 0.98)] || lo * 10
     setLegend({ lo, hi })
-    const color = (v) => {
+    const mapVal = (v) => {
       const t = Math.max(lo, Math.min(hi, v))
       const s = Math.log10(t) - Math.log10(lo)
       const d = Math.log10(hi) - Math.log10(lo)
-      return interpolateViridis(d > 0 ? s / d : 0.5)
+      return d > 0 ? s / d : 0.5
     }
     overlay.setProps({
       layers: [new H3HexagonLayer({
         id: 'city-h3', data: rows, pickable: true,
         getHexagon: (d) => d.h3index,
         getFillColor: (d) => {
-          const v = metric === 'pop' ? d.population_2015 : d.total_built_mass_tons
-          const [r, g, b] = cssToRgb(color(v))
+          const v = isPop ? d.population_2015 : d.total_built_mass_tons
+          const [r, g, b] = cssToRgb(colorFn(mapVal(v)))
           return [r, g, b, 210]
         },
+        updateTriggers: { getFillColor: [m] },
         stroked: false, extruded: false,
         onHover: ({ x, y, object }) => {
           if (!object) { setTooltip(null); return }
@@ -263,10 +292,12 @@ const MapView = ({ scope, metric, onSelectCountry, onSelectCity, onReset }) => {
     })
   }
 
+  // Build legend gradient based on current metric
   const gradient = useMemo(() => {
-    const colors = Array.from({ length: 11 }, (_, i) => interpolateViridis(i / 10)).join(',')
+    const rampFn = metric === 'pop' ? colorPop : colorMass
+    const colors = Array.from({ length: 11 }, (_, i) => rampFn(i / 10)).join(',')
     return `linear-gradient(to right, ${colors})`
-  }, [])
+  }, [metric])
 
   return (
     <div className="map-container">
@@ -341,7 +372,6 @@ function formatSI(num) {
 }
 
 // Parse CSS color string to [r, g, b] array
-// Handles rgb(r,g,b), rgba(r,g,b,a), and hex (#rrggbb / #rgb) formats
 function cssToRgb(css) {
   if (!css) return [160, 160, 160]
   const rgbMatch = css.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/)
@@ -355,16 +385,19 @@ function cssToRgb(css) {
   return [160, 160, 160]
 }
 
-function turfBbox(feat) {
-  const coords = []
-  const walk = (g) => {
-    if (g.type === 'Polygon') coords.push(...g.coordinates.flat())
-    else if (g.type === 'MultiPolygon') coords.push(...g.coordinates.flat(2))
-    else if (g.type === 'GeometryCollection') g.geometries.forEach(walk)
-  }
-  walk(feat.geometry)
+// Compute bbox over multiple features (handles countries with multiple polygons like CHN)
+function turfBboxMulti(features) {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
-  coords.forEach(([x, y]) => { if (x < minX) minX = x; if (y < minY) minY = y; if (x > maxX) maxX = x; if (y > maxY) maxY = y })
+  for (const feat of features) {
+    const coords = []
+    const walk = (g) => {
+      if (g.type === 'Polygon') coords.push(...g.coordinates.flat())
+      else if (g.type === 'MultiPolygon') coords.push(...g.coordinates.flat(2))
+      else if (g.type === 'GeometryCollection') g.geometries.forEach(walk)
+    }
+    walk(feat.geometry)
+    coords.forEach(([x, y]) => { if (x < minX) minX = x; if (y < minY) minY = y; if (x > maxX) maxX = x; if (y > maxY) maxY = y })
+  }
   return [[minX, minY], [maxX, maxY]]
 }
 

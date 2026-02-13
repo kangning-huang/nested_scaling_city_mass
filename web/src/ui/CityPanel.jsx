@@ -1,14 +1,7 @@
-import React, { useEffect, useRef, useState, useMemo } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import Fuse from 'fuse.js'
 import { DATA_BASE } from '../config'
 import { useTheme } from './useTheme.js'
-
-const COLORS = {
-  point: 'rgba(141, 160, 203, 0.5)',
-  density: (v) => `rgba(141, 160, 203, ${Math.min(0.92, 0.08 + v * 0.84)})`,
-  line: '#fc8d62',
-  band: 'rgba(252, 141, 98, 0.18)',
-}
 
 const Scatter = ({ data, reg, mode, xKey, yKey, xLabel, yLabel, centered, chartColors }) => {
   const canvasRef = useRef(null)
@@ -23,9 +16,12 @@ const Scatter = ({ data, reg, mode, xKey, yKey, xLabel, yLabel, centered, chartC
     canvas.height = H * dpr
     const ctx = canvas.getContext('2d')
     ctx.scale(dpr, dpr)
-    ctx.clearRect(0, 0, W, H)
 
     const cc = chartColors || {}
+
+    // Fill canvas background
+    ctx.fillStyle = cc.canvasBg || '#ffffff'
+    ctx.fillRect(0, 0, W, H)
 
     if (!data || !data.length) {
       ctx.fillStyle = cc.emptyText || '#9a948e'
@@ -101,6 +97,10 @@ const Scatter = ({ data, reg, mode, xKey, yKey, xLabel, yLabel, centered, chartC
     ctx.fillText(yLabel, 0, 0)
     ctx.restore()
 
+    // Data
+    const densityFn = cc.cityDensity || ((v) => `rgba(141,160,203,${Math.min(0.92, 0.08+v*0.84)})`)
+    const pointColor = cc.cityPoint || 'rgba(141,160,203,0.5)'
+
     if (mode === 'density') {
       const gw = 120, gh = 90
       const grid = new Uint32Array(gw * gh)
@@ -114,25 +114,27 @@ const Scatter = ({ data, reg, mode, xKey, yKey, xLabel, yLabel, centered, chartC
         for (let xi = 0; xi < gw; xi++) {
           const v = grid[yi * gw + xi] / max
           if (v <= 0) continue
-          ctx.fillStyle = COLORS.density(v)
+          ctx.fillStyle = densityFn(v)
           const x0 = pad.left + (xi / gw) * pw
           const y0 = H - pad.bottom - ((yi + 1) / gh) * ph
           ctx.fillRect(x0, y0, pw / gw + 1, ph / gh + 1)
         }
       }
     } else {
-      ctx.fillStyle = COLORS.point
+      ctx.fillStyle = pointColor
       for (const d of data) {
         ctx.fillRect(sx(d[xKey]) - 1, sy(d[yKey]) - 1, 2.5, 2.5)
       }
     }
 
     // Regression
+    const lineColor = cc.cityLine || '#fc8d62'
+    const bandColor = cc.cityBand || 'rgba(252,141,98,0.18)'
     if (reg && isFinite(reg.slope)) {
       const xs = [xMin, xMax]
       const line = (m) => xs.map((x) => ({ x, y: reg.y0 + m * (x - reg.x0) }))
       if (isFinite(reg.slope_lo) && isFinite(reg.slope_hi)) {
-        ctx.fillStyle = COLORS.band
+        ctx.fillStyle = bandColor
         ctx.beginPath()
         const upper = line(reg.slope_hi)
         const lower = line(reg.slope_lo).reverse()
@@ -143,7 +145,7 @@ const Scatter = ({ data, reg, mode, xKey, yKey, xLabel, yLabel, centered, chartC
         ctx.closePath()
         ctx.fill()
       }
-      ctx.strokeStyle = COLORS.line
+      ctx.strokeStyle = lineColor
       ctx.lineWidth = 2
       ctx.beginPath()
       const L = line(reg.slope)
@@ -272,6 +274,8 @@ const CityPanel = ({ scope, onSelectCity, countryName }) => {
   const xLabel = isCentered ? '\u0394 log\u2081\u2080 Population' : 'log\u2081\u2080 Population'
   const yLabel = isCentered ? '\u0394 log\u2081\u2080 Built Mass' : 'log\u2081\u2080 Built Mass (t)'
 
+  const densityFn = chartColors.cityDensity
+
   return (
     <>
       <div className="section-title">
@@ -288,7 +292,7 @@ const CityPanel = ({ scope, onSelectCity, countryName }) => {
           <div className="density-ramp">
             <span className="label">low</span>
             {[0, 1, 2, 3, 4, 5].map((i) => (
-              <div key={i} className="swatch" style={{ background: COLORS.density(i / 5) }} />
+              <div key={i} className="swatch" style={{ background: densityFn(i / 5) }} />
             ))}
             <span className="label">high</span>
           </div>
@@ -299,15 +303,15 @@ const CityPanel = ({ scope, onSelectCity, countryName }) => {
         {reg && isFinite(reg.slope) && (
           <>
             <span><span className="stat-label">Slope</span> <span className="stat-value">{reg.slope.toFixed(3)}</span></span>
-            <span><span className="stat-label">95% CI</span> {reg.slope_lo.toFixed(3)}–{reg.slope_hi.toFixed(3)}</span>
+            <span><span className="stat-label">95% CI</span> {reg.slope_lo.toFixed(3)}&ndash;{reg.slope_hi.toFixed(3)}</span>
             <span><span className="stat-label">n</span> {reg.n?.toLocaleString()}</span>
             <span><span className="stat-label">R&sup2;</span> {reg.r2?.toFixed(3)}</span>
           </>
         )}
       </div>
       <div className="legend-row">
-        <span><span className="legend-swatch" style={{ display: 'inline-block', width: 16, height: 2, borderRadius: 1, background: COLORS.line }} /> OLS fit</span>
-        <span><span className="legend-swatch" style={{ display: 'inline-block', width: 16, height: 8, borderRadius: 2, background: COLORS.band, border: `1px solid ${COLORS.band}` }} /> 95% CI</span>
+        <span><span className="legend-swatch" style={{ display: 'inline-block', width: 16, height: 2, borderRadius: 1, background: chartColors.cityLine }} /> OLS fit</span>
+        <span><span className="legend-swatch" style={{ display: 'inline-block', width: 16, height: 8, borderRadius: 2, background: chartColors.cityBand, border: `1px solid ${chartColors.cityBand}` }} /> 95% CI</span>
       </div>
       <CitySearch onSelectCity={onSelectCity} />
     </>
