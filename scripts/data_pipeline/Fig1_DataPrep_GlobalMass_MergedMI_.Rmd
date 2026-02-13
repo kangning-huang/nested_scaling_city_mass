@@ -1,0 +1,511 @@
+---
+title: "Fig1_GlobalMass_ByClass"
+output: html_notebook:null
+---
+Input: merged_building_road_otherpavement.csv (Dated: June12,2025, fixed volume issue in Esch2022;June12, 2025 fixed negative OtherPav, found issue with climate code)
+Output: MasterMass_ByClass
+
+```{r}
+rm(list=ls())
+```
+
+
+# 1. Packges, function, parameters
+```{r}
+# library
+library(pacman)
+p_load(tidyverse,gridGraphics,scales,broom,Rmisc,maps,mapdata,countrycode,janitor)
+```
+
+# 2. Input
+Everything should be organized around the city code: ID_HDC_G0
+```{r}
+# pavement and volume data to derive building and mobility datasets
+DF_Merged <-read.csv("../data/processed/merged_building_road_otherpavement.csv",stringsAsFactors = FALSE, row.names = NULL)%>%
+  select(-Unnamed..0)
+
+
+# biomass dataset
+path_input2<-"../data/processed/biomass_by_cities.csv" #find out based on which year
+DF_Biomass <- read.csv(path_input2,stringsAsFactors = FALSE, row.names = NULL) %>%
+    select(-X) %>%
+  dplyr::rename("total_biomassC_tons" = "total_biomass_tons") %>%
+  mutate(total_dryBiomass_tons = total_biomassC_tons/0.48)
+head(DF_Biomass)
+```
+
+the 5 class code based on Haberl2025
+| Class ID | Building type                                                   | WSF3Dv2 building height [m] | GHS-BUILT-S [class]             |
+|----------|-----------------------------------------------------------------|------------------------------|---------------------------------|
+| LW       | Lightweight                                                     | <3                           | Residential + non-residential   |
+| RS       | Residential single-family house (residential, single)           | 3–12                         | Residential                     |
+| RM       | Residential multi-family house (residential, multi)             | 12–50                        | Residential                     |
+| NR       | Non-residential                                                 | 3–50                         | Non-residential                 |
+| HR       | High-rise                                                       | 50–100                       | Residential + non-residential   |
+
+```{r}
+
+table(DF_Merged$climate_class)
+
+
+DF_Merged %>%
+  dplyr::filter(population_2015>50000)%>%
+  filter(climate_class == "")
+
+DF_Merged %>%
+  filter(UC_NM_MN=="Sullana")
+
+DF_Merged
+```
+# Split into sub workflows: buildings, roads&pavement 
+```{r}
+# 1. Define key ID columns
+id_cols <- c(
+  "ID_HDC_G0","UC_NM_MN","CTR_MN_ISO","CTR_MN_NM",
+  "GRGN_L1","GRGN_L2","population_2015","lat","lon"
+)
+
+# 2. Extract & tidy only the vol_… columns
+DF_BuildingVolume <- DF_Merged %>%
+  select(all_of(id_cols),
+         matches("^vol_[^_]+_(LW|RS|RM|HR|NR)$")) %>%
+  pivot_longer(
+    cols          = matches("^vol_[^_]+_(LW|RS|RM|HR|NR)$"),
+    names_to      = c("DataSource","Class"),
+    names_pattern = "vol_([^_]+)_([^_]+)",
+    values_to     = "Volume_m3"
+  ) %>%
+  select(all_of(id_cols),
+         DataSource, Class, Volume_m3)
+```
+
+```{r}
+# 3. Road surface area
+road_id_cols <- c(id_cols, "climate_class")
+
+DF_RoadSurface <- DF_Merged %>%
+  select(all_of(road_id_cols),
+         matches("^road_area_(low|high)_[^_]+$")) %>%
+  pivot_longer(
+    cols          = matches("^road_area_(low|high)_[^_]+$"),
+    names_to      = c("Estimate", "RoadType"),
+    names_pattern = "road_area_(low|high)_([^_]+)",
+    values_to     = "RoadArea_m2"
+  ) %>%
+  mutate(Source = "Rousseau2022") %>%
+    mutate(
+    # Standardize blanks → NA
+    climate_class = na_if(str_trim(climate_class), ""),
+    # Pull out exactly the four codes or fallback to “multiple”
+    ClimateCode = case_when(
+      str_detect(climate_class, "\\(DN\\)") ~ "DN",
+      str_detect(climate_class, "\\(DF\\)") ~ "DF",
+      str_detect(climate_class, "\\(WN\\)") ~ "WN",
+      str_detect(climate_class, "\\(WF\\)") ~ "WF",
+      TRUE                                  ~ NA_character_)) %>% select(-climate_class) %>%
+  filter(RoadType != "total") %>%
+  mutate(GRIPRoadType = case_when(
+      RoadType == "highway"   ~ 1L,
+      RoadType == "primary"   ~ 2L,
+      RoadType == "secondary" ~ 3L,
+      RoadType == "tertiary"  ~ 4L,
+      RoadType == "local"     ~ 5L,
+      TRUE                    ~ NA_integer_
+    ))
+  
+# Add GRIP region code 
+DF_RoadSurface <- DF_RoadSurface %>%
+    mutate(
+    # 1) derive the human‐readable region
+    GRIPRegion = case_when(
+      GRGN_L1 == "Northern America"                                     ~ "North America",
+      GRGN_L2 %in% c("Central America","South America","Caribbean")      ~ "Central and South America",
+      GRGN_L1 == "Africa"                                                ~ "Africa",
+      GRGN_L1 == "Europe"                                                ~ "Europe",
+      GRGN_L2 %in% c("Western Asia","Central Asia")                      ~ "Middle East and Central Asia",
+      GRGN_L2 %in% c("Eastern Asia","South-Eastern Asia","Southern Asia")~ "South and East Asia",
+      GRGN_L1 == "Oceania"                                               ~ "Oceania",
+      TRUE                                                               ~ NA_character_
+    ),
+    # 2) map that name onto its integer code
+    GRIPRegionCode = case_when(
+      GRIPRegion == "North America"                        ~ 1L,
+      GRIPRegion == "Central and South America"            ~ 2L,
+      GRIPRegion == "Africa"                               ~ 3L,
+      GRIPRegion == "Europe"                               ~ 4L,
+      GRIPRegion == "Middle East and Central Asia"         ~ 5L,
+      GRIPRegion == "South and East Asia"                  ~ 6L,
+      GRIPRegion == "Oceania"                              ~ 7L,
+      TRUE                                                 ~ NA_integer_))
+# peek 
+(DF_RoadSurface) %>%
+  filter(is.na(ClimateCode),population_2015>50000)
+
+DF_RoadSurface
+```
+```{r}
+# 4. Other pavement (non-road)
+DF_OtherPavement <- DF_Merged %>%  # Ensure this uses DF_Merged
+  select(all_of(id_cols), matches("^other_pavement_footprint_")) %>%
+  pivot_longer(
+    cols            = matches("^other_pavement_footprint_"), # Corrected prefix
+    names_to        = c("Source", "Estimate"),
+    # Corrected pattern to match the actual column name structure
+    names_pattern = "other_pavement_footprint_([^_]+)_(low|high)",
+    values_to       = "OtherPavArea_m2"
+  )
+
+DF_OtherPavement %>%
+  filter(OtherPavArea_m2>0) # these cities OtherPaveArea are zero, meaning road surface area is larger or equal to their GIS based pavement area. 
+```
+
+# Building 
+## Add materiall intensity to volume data
+```{r}
+# load the countrycode lookup
+data("codelist", package="countrycode")
+
+# 1. OECD up through 1990
+oecd1990 <- codelist %>%
+  filter(ar5=="OECD1990") %>%
+  pull(iso3c)
+
+# 2. add the 2010 entrants
+OECD2010 <- c(oecd1990, "CHL","EST","ISR","SVN")
+other_oecd2010 <- setdiff(OECD2010, c("USA","JPN"))
+
+
+
+#3. define  MI lookup table
+MI_lookup <- tribble(
+  ~Class, ~RegionMI,                     ~MI,
+  "RS",   "OECD (excl. NA and Japan)",   349.64,
+  "RS",   "North America",               284.87,
+  "RS",   "Japan",                       124.93,
+  "RS",   "China",                       526.00,
+  "RS",   "Rest of the world",           299.45,
+  "RM",   "OECD (excl. NA and Japan)",   398.60,
+  "RM",   "North America",               314.72,
+  "RM",   "Japan",                       601.60,
+  "RM",   "China",                       662.06,
+  "RM",   "Rest of the world",           394.77,
+  "NR",   "OECD (excl. NA and Japan)",   375.55,
+  "NR",   "North America",               280.82,
+  "NR",   "Japan",                       272.90,
+  "NR",   "China",                       654.06,
+  "NR",   "Rest of the world",           367.81,
+  "LW",   "North America",               151.30,
+  "LW",   "Rest of the world",           154.20,
+  "HR",   "North America",               312.35,
+  "HR",   "Rest of the world",           329.98
+)
+
+# 4. recode RegionMI using that 2010 list
+DF_MI_Buildings <- DF_BuildingVolume %>%
+  mutate(
+    RegionMI = case_when(
+      # LW & HR: only two buckets
+      Class %in% c("LW","HR") & CTR_MN_ISO %in% c("USA","CAN")     ~ "North America",
+      Class %in% c("LW","HR")                                      ~ "Rest of the world",
+      # RS, RM, NR: five buckets
+      Class %in% c("RS","RM","NR") & CTR_MN_ISO %in% c("USA","CAN")         ~ "North America",
+      Class %in% c("RS","RM","NR") & CTR_MN_ISO == "JPN"                    ~ "Japan",
+      Class %in% c("RS","RM","NR") & CTR_MN_ISO == "CHN"                    ~ "China",
+      Class %in% c("RS","RM","NR") & CTR_MN_ISO %in% other_oecd2010         ~ "OECD (excl. NA and Japan)",
+      Class %in% c("RS","RM","NR")                                          ~ "Rest of the world",
+      TRUE                                                                  ~ NA_character_
+    )
+  ) %>%
+  left_join(MI_lookup, by = c("Class","RegionMI")) %>%
+  mutate(BuildingMass = Volume_m3*MI/1000) # volume is in m3, MI is in kg/m3, converting to tonne using 1000. Pavement unit in m2, Imprevious area unit in pixel, which is 100m2 
+
+```
+
+```{r}
+(DF_MI_Buildings)  %>%
+   filter(UC_NM_MN=="New York") %>%
+  arrange(Class)
+```
+
+
+# Adding material intensity to road surface 
+```{r}
+# --- 1. Read & clean the MI lookup table (similar to your original code) ---
+mi_road <- read_csv("../data/raw/Rousseau2022_SITable_MI.csv") %>%
+  clean_names() %>%
+  select(
+    iso3             = country_alpha_3_code,
+    grip_region_code = grip_region,
+    grip_rt          = grip_road_type,
+    climate          = climate_class, # Keep climate for now
+    asphalt          = asphalt_int_median,
+    granular         = granular_int_median,
+    cement           = cement_int_median,
+    concrete         = concrete_int_median
+  )
+
+# --- 2. Prepare four specialized MI lookup tables ---
+
+# 2a. Country-Specific data (Overall)
+mi_spec_all <- mi_road %>%
+  filter(tolower(iso3) != "generic")
+
+# Country-Specific with Specific Climate
+mi_spec_climate <- mi_spec_all %>%
+  filter(tolower(climate) != "multiple")
+  # Joins by: iso3, grip_region_code, grip_rt, climate
+
+# Country-Specific with "Multiple" Climate (climate-agnostic for that country)
+mi_spec_multiple <- mi_spec_all %>%
+  filter(tolower(climate) == "multiple") %>%
+  select(-climate) # Remove climate column; join by iso3, grip_region_code, grip_rt
+
+# 2b. Generic data (Overall)
+mi_gen_all <- mi_road %>%
+  filter(tolower(iso3) == "generic") %>%
+  select(-iso3) # Generic rows don’t need iso3
+
+# Generic with Specific Climate
+mi_gen_climate <- mi_gen_all %>%
+  filter(tolower(climate) != "multiple")
+  # Joins by: grip_region_code, grip_rt, climate
+
+# Generic with "Multiple" Climate (climate-agnostic generic)
+mi_gen_multiple <- mi_gen_all %>%
+  filter(tolower(climate) == "multiple") %>%
+  select(-climate) # Remove climate column; join by grip_region_code, grip_rt
+
+# --- 3. Join onto your road surface data (DF_RoadSurface) using the hierarchy ---
+# Assuming DF_RoadSurface has columns:
+# CTR_MN_ISO, GRIPRegionCode, GRIPRoadType, ClimateCode, RoadArea_m2, etc.
+
+original_df_cols <- colnames(DF_RoadSurface) # Store original column names
+final_intensity_cols <- c("asphalt", "granular", "cement", "concrete") # Desired final names
+
+road_data_mi <- DF_RoadSurface %>%
+  # 3.1. Join Country-Specific, Climate-Specific MI
+  left_join(
+    mi_spec_climate,
+    by = c(
+      "CTR_MN_ISO"     = "iso3",
+      "GRIPRegionCode" = "grip_region_code",
+      "GRIPRoadType"   = "grip_rt",
+      "ClimateCode"    = "climate"
+    )
+    # This adds: asphalt, granular, cement, concrete (from this specific join)
+  ) %>%
+  # 3.2. Join Country-Specific, "Multiple" Climate MI
+  left_join(
+    mi_spec_multiple,
+    by = c(
+      "CTR_MN_ISO"     = "iso3",
+      "GRIPRegionCode" = "grip_region_code",
+      "GRIPRoadType"   = "grip_rt"
+    ),
+    suffix = c("", "_spec_mult") # Results in: asphalt (from 3.1), asphalt_spec_mult (from 3.2), etc.
+  ) %>%
+  # 3.3. Join Generic, Climate-Specific MI
+  left_join(
+    mi_gen_climate,
+    by = c(
+      "GRIPRegionCode" = "grip_region_code",
+      "GRIPRoadType"   = "grip_rt",
+      "ClimateCode"    = "climate"
+    ),
+    suffix = c("", "_gen_clim") # Results in: ..., asphalt_gen_clim, etc.
+  ) %>%
+  # 3.4. Join Generic, "Multiple" Climate MI
+  left_join(
+    mi_gen_multiple,
+    by = c(
+      "GRIPRegionCode" = "grip_region_code",
+      "GRIPRoadType"   = "grip_rt"
+    ),
+    suffix = c("", "_gen_mult") # Results in: ..., asphalt_gen_mult, etc.
+  ) %>%
+  # --- 4. Coalesce to get the final MI values ---
+  # The order of columns in coalesce defines the preference.
+  mutate(
+    asphalt_final  = coalesce(asphalt, asphalt_spec_mult, asphalt_gen_clim, asphalt_gen_mult),
+    granular_final = coalesce(granular, granular_spec_mult, granular_gen_clim, granular_gen_mult),
+    cement_final   = coalesce(cement, cement_spec_mult, cement_gen_clim, cement_gen_mult),
+    concrete_final = coalesce(concrete, concrete_spec_mult, concrete_gen_clim, concrete_gen_mult)
+  ) %>%
+  # --- 5. Select and rename final columns ---
+  # Keep original DF_RoadSurface columns and the final intensity values.
+  # Drop all intermediate suffixed columns and the original unsuffixed one from the first join.
+  select(
+    all_of(original_df_cols), # Keep all original columns from DF_RoadSurface
+    asphalt  = asphalt_final,  # Rename coalesced columns to final names
+    granular = granular_final,
+    cement   = cement_final,
+    concrete = concrete_final
+  )
+
+# --- 6. Compute masses ---
+# This step uses the newly robust 'asphalt', 'granular', etc. columns.converting from kg to tonnes
+road_data_mass <- road_data_mi %>%
+  mutate(
+    Mass_asphalt  = RoadArea_m2 * asphalt  / 1000,
+    Mass_granular = RoadArea_m2 * granular / 1000,
+    Mass_cement   = RoadArea_m2 * cement   / 1000,
+    Mass_concrete = RoadArea_m2 * concrete / 1000
+  )
+
+ road_data_mass
+```
+```{r}
+road_data_mass %>%
+  filter(CTR_MN_ISO=="CAN",GRIPRoadType==1)
+```
+# Mass of other pavement
+```{r}
+DF_OtherPavement<-DF_OtherPavement %>%
+  mutate(OtherPavMass = OtherPavArea_m2*0.57) # 0.57t/m2 from Frantz2023 SI Table 15 for parking lots and yards for other type of pavement. 
+
+DF_OtherPavement %>%
+  filter(OtherPavArea_m2>0)
+```
+
+
+
+# Condensing by city
+## for buildings 
+show average and variance 
+```{r}
+id_cols <- c(
+  "ID_HDC_G0", "UC_NM_MN", "CTR_MN_ISO", "CTR_MN_NM",
+  "GRGN_L1", "GRGN_L2", "population_2015", "lat", "lon"
+)
+
+# Part 1: Derive total building mass by data source, convert 0 to NA, then pivot
+building_totals_pivoted_by_source <- DF_MI_Buildings %>%
+  filter(population_2015 > 50000) %>%
+  group_by(across(all_of(id_cols)), DataSource) %>%
+  dplyr::summarise(
+    TotalBuildingMass_for_DataSource = sum(BuildingMass, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    TotalBuildingMass_for_DataSource = ifelse(TotalBuildingMass_for_DataSource == 0, 
+                                              NA_real_, 
+                                              TotalBuildingMass_for_DataSource)
+  ) %>%
+  pivot_wider(
+    names_from = DataSource,
+    values_from = TotalBuildingMass_for_DataSource,
+    names_glue = "BuildingMass_Total_{DataSource}"
+  )
+head(building_totals_pivoted_by_source)
+names(building_totals_pivoted_by_source)
+```
+
+```{r}
+# liu2024 from the input data have these cities volume at zero, I converted zero to NA to avoid impacting the average. Liu2024's 0 is actually NA, not 0
+
+building_totals_pivoted_by_source %>%
+  filter(if_any(c(BuildingMass_Total_Esch2022,
+                  BuildingMass_Total_Liu2024,
+                  BuildingMass_Total_Li2022), is.na)) %>%
+  write.csv("missing_buildingmass_rows.csv", row.names = FALSE)
+
+building_totals_pivoted_by_source %>%
+  filter(if_any(c(BuildingMass_Total_Esch2022,
+                  BuildingMass_Total_Liu2024,
+                  BuildingMass_Total_Li2022), is.na))
+```
+
+```{r}
+
+building_summary_final <- building_totals_pivoted_by_source %>%
+  mutate(
+    BuildingMass_AverageTotal = rowMeans(
+      select(., BuildingMass_Total_Esch2022, 
+                  BuildingMass_Total_Li2022, 
+                  BuildingMass_Total_Liu2024), 
+      na.rm = TRUE
+    ),
+    BuildingMass_AverageTotal = ifelse(is.nan(BuildingMass_AverageTotal), NA_real_, BuildingMass_AverageTotal)) 
+
+building_summary_final
+```
+## for roads
+```{r}
+road_summary_final <- 
+  road_data_mass %>%
+  filter(population_2015 > 50000) %>% 
+  mutate(
+    TotalRoadMaterialMass = Mass_asphalt + Mass_granular + Mass_cement + Mass_concrete
+  ) %>%
+  group_by(across(all_of(id_cols)), Estimate) %>% 
+  dplyr::summarise(
+    RoadMass_by_Estimate = sum(TotalRoadMaterialMass, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(
+    names_from = Estimate,
+    values_from = RoadMass_by_Estimate,
+    names_glue = "RoadMass_{Estimate}" 
+  ) %>%
+  mutate(
+    RoadMass_Average = (RoadMass_low + RoadMass_high) / 2
+  )
+
+head(road_summary_final)
+
+road_data_mass
+```
+## for other pavement
+```{r}
+other_pavement_summary_final <- DF_OtherPavement %>%
+  filter(population_2015 > 50000) %>%
+  group_by(across(all_of(id_cols)), Estimate) %>%
+  dplyr::summarise(
+    AggregatedOtherPavMass = mean(OtherPavMass, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    AggregatedOtherPavMass = ifelse(AggregatedOtherPavMass == 0, NA_real_, AggregatedOtherPavMass)
+  ) %>%
+  pivot_wider(
+    names_from = Estimate,
+    values_from = AggregatedOtherPavMass,
+    names_glue = "OtherPavMass_{Estimate}"
+  ) %>%
+  mutate(
+    OtherPavMass_Average = (OtherPavMass_low + OtherPavMass_high) / 2
+  )
+
+# other_pavement_summary_final %>%
+  # filter(is.na(OtherPavMass_Average))
+other_pavement_summary_final%>%
+  filter(OtherPavMass_Average>0)
+```
+
+# Combining with vegetation after condensing and export
+```{r}
+MasterMass_ByClass<-building_summary_final %>%
+  left_join(road_summary_final) %>%
+  left_join(other_pavement_summary_final) %>%
+  left_join(DF_Biomass) %>%
+  mutate(mobility_mass_tons = OtherPavMass_Average+RoadMass_Average,
+    total_built_mass_tons = OtherPavMass_Average+RoadMass_Average+BuildingMass_AverageTotal)
+
+write.csv(MasterMass_ByClass, paste0("MasterMass_ByClass", format(Sys.Date(), "%Y%m%d"), ".csv"),row.names = FALSE)
+
+MasterMass_ByClass
+```
+# peek into shanghai
+```{r}
+MasterMass_ByClass %>%
+  filter(UC_NM_MN=="New York")
+```
+
+
+
+
+
+
+
+
+

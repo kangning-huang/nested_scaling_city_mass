@@ -1,0 +1,157 @@
+---
+title: "R Notebook"
+output: html_notebook:null
+---
+Mission:
+1. Calculate Urban Total Stats
+2. Cross-validate results with literature
+
+```{r}
+rm(list=ls())
+```
+
+# 1. Packges, function, parameters
+```{r}
+# library
+library(pacman)
+p_load(tidyverse,gridGraphics,zoo,scales,broom,Rmisc,maps,mapdata,patchwork)
+```
+
+# 2. Input
+```{r}
+
+DF_MassLong <- read.csv("../data/processed/MasterMass_ByClass20250616.csv",stringsAsFactors = FALSE) %>%
+  filter(population_2015>50000) # consistent with the defination of our cities in Methods
+
+DF_HistTrend <- read.csv("../data/processed/HistTrend20240924.csv",stringsAsFactors = FALSE)
+```
+
+# 3. Urban stats 
+```{r}
+
+# View the data structure and arrange by total built mass
+DF_MassLong %>%
+  arrange(total_built_mass_tons)
+
+# Create histogram of total built mass
+DF_MassLong %>%
+  ggplot(aes(x=total_built_mass_tons)) +
+  geom_histogram(bins = 50, color="black", fill="lightgray") +
+  scale_x_log10() +
+  labs(x = "Total Built Mass (tons)", y = "Count", 
+       title = "Distribution of Total Built Mass Across Cities")
+
+# Calculate total built mass across all cities
+total_built_mass_summary <- DF_MassLong %>%
+  summarise(
+    Total_Built_Mass_Tons = sum(total_built_mass_tons, na.rm = TRUE),
+    Number_of_Cities = n(),
+    Mean_Built_Mass = mean(total_built_mass_tons, na.rm = TRUE),
+    Median_Built_Mass = median(total_built_mass_tons, na.rm = TRUE)
+  )
+
+print(total_built_mass_summary)
+
+# Display the data
+DF_MassLong
+```
+
+```{r}
+df_top100 <- DF_MassLong %>%
+  dplyr::arrange(dplyr::desc(total_built_mass_tons)) %>%
+  dplyr::mutate(
+    TotalMass   = sum(total_built_mass_tons, na.rm = TRUE),
+    CumMass     = cumsum(total_built_mass_tons),
+    CumMassProp = CumMass / TotalMass,
+    CityRank    = dplyr::row_number()
+  )
+
+# Extract the cumulative mass proportion of the top 100 cities
+mass_top100 <- df_top100$CumMassProp[100]
+mass_top10 <- df_top100$CumMassProp[10]
+mass_top10
+cat("The top 100 cities account for", round(mass_top100 * 100, 1), "% of total urban mass.\n")
+cat("The top 10 cities account for", round(mass_top10 * 100, 1), "% of total urban mass.\n")
+
+
+df_top100
+
+
+df_top100_popu <- DF_MassLong %>%
+  dplyr::arrange(dplyr::desc(population_2015)) %>%
+  dplyr::mutate(
+    TotalPopu   = sum(population_2015, na.rm = TRUE),
+    CumPopu     = cumsum(population_2015),
+    CumPopuProp = CumPopu / TotalPopu,
+    CityRank    = dplyr::row_number()
+  )
+
+
+popu_top10 <- df_top100_popu$CumPopuProp[10]
+popu_top10
+cat("The top 10 cities account for", round(popu_top10 * 100, 1), "% of total urban population\n")
+df_top100_popu
+```
+
+
+```{r}
+# 1. Calculate the combined mass of the top 10 cities
+top100_mass <- DF_MassLong %>%
+  dplyr::arrange(dplyr::desc(total_built_mass_tons)) %>%
+  dplyr::slice(1:100) %>%                           # select the top 100 cities
+  dplyr::summarise(TotalTop100 = sum(total_built_mass_tons, na.rm = TRUE)) %>%  # sum their masses
+  dplyr::pull(TotalTop100)
+
+cat("Combined mass of the top 100 cities:", top100_mass, "\n")
+
+# 2. Sort all cities in ascending order (smallest first) and calculate cumulative mass
+df_smallest <- DF_MassLong %>%
+  dplyr::arrange(total_built_mass_tons) %>%         # sort by ascending total_built_mass_tons
+  dplyr::mutate(
+    CumMass = cumsum(total_built_mass_tons)         # cumulative sum of mass
+  )
+
+# 3. Find how many smallest cities are needed to equal or exceed the top 10 combined mass
+n_smallest <- which(df_smallest$CumMass >= top100_mass)[1]
+
+cat("The combined mass of the top 100 cities is equivalent to the cumulative mass of the smallest", 
+    n_smallest, "cities.\n")
+
+```
+
+```{r}
+# 1. Calculate the combined population of the top 10 cities
+top10_popu <- DF_MassLong %>%
+  dplyr::arrange(dplyr::desc(population_2015)) %>%
+  dplyr::slice(1:10) %>%                           # select the top 10 cities
+  dplyr::summarise(TotalTop10 = sum(population_2015, na.rm = TRUE)) %>%  # sum their population
+  dplyr::pull(TotalTop10)
+
+cat("Combined population of the top 10 cities:", top10_popu, "\n")
+
+# 2. Sort all cities in ascending order (smallest first) and calculate cumulative population
+df_smallest_popu <- DF_MassLong %>%
+  dplyr::arrange(population_2015) %>%         # sort by ascending population_2015
+  dplyr::mutate(
+    CumPopu = cumsum(population_2015)         # cumulative sum of population
+  )
+
+# 3. Find how many smallest cities are needed to equal or exceed the top 10 combined mass
+n_smallest_popu <- which(df_smallest_popu$CumPopu >= top10_popu)[1]
+
+cat("The combined population of the top 10 cities is equivalent to the cumulative population of the smallest", 
+    n_smallest_popu, "cities.\n")
+```
+
+
+
+```{r}
+DF_MassLong %>%
+  arrange(total_built_mass_tons) %>%
+  ggplot(aes(x=population_2015)) +
+  geom_histogram(bins = 50) +
+  geom_vline(xintercept=50000, linetype = 2)+
+  scale_x_log10()
+```
+
+In total 7108 cities

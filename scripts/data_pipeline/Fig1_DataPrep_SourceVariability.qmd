@@ -1,0 +1,452 @@
+---
+title: "Data Source Variability Analysis"
+output: html_notebook
+---
+
+# Input Files
+- missing_buildingmass_rows.csv
+- MasterMass_ByClass20250616.csv
+
+```{r}
+rm(list=ls())
+```
+# Load required libraries
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(ggplot2)
+library(plotly)
+library(corrplot)
+library(viridis)
+library(scales)
+```
+
+```{r}
+# Load the CSV file
+data <- read.csv("../data/processed/MasterMass_ByClass20250616.csv")
+
+# Basic data inspection
+cat("Dataset dimensions:", dim(data), "\n")
+cat("Number of cities:", nrow(data), "\n")
+cat("Number of variables:", ncol(data), "\n\n")
+
+# Check column names
+print("Column names:")
+print(colnames(data))
+
+# Summary of building mass columns
+building_mass_cols <- c("BuildingMass_Total_Esch2022", "BuildingMass_Total_Li2022", "BuildingMass_Total_Liu2024")
+print("\nSummary of building mass data sources:")
+summary(data[building_mass_cols])
+
+# Check for missing values
+cat("\nMissing values per building mass source:\n")
+sapply(data[building_mass_cols], function(x) sum(is.na(x)))
+```
+
+# Data Preparation for Variability Analysis
+
+```{r}
+# Prepare data for variability analysis
+variability_stats <- data %>%
+  select(UC_NM_MN, CTR_MN_NM, population_2015, all_of(building_mass_cols)) %>%
+  rowwise() %>%
+  mutate(
+    # Count non-missing sources
+    n_sources = sum(!is.na(c_across(all_of(building_mass_cols)))),
+    
+    # Calculate mean, standard deviation, and CV only for cities with 2+ sources
+    mean_mass = ifelse(n_sources >= 2, 
+                      mean(c_across(all_of(building_mass_cols)), na.rm = TRUE), 
+                      NA),
+    sd_mass = ifelse(n_sources >= 2, 
+                    sd(c_across(all_of(building_mass_cols)), na.rm = TRUE), 
+                    NA),
+    cv_mass = ifelse(n_sources >= 2 & mean_mass > 0, 
+                    sd_mass / mean_mass, 
+                    NA)
+  ) %>%
+  ungroup()
+
+# Summary of variability statistics
+cat("Cities with data from multiple sources:", sum(variability_stats$n_sources >= 2, na.rm = TRUE), "\n")
+cat("Cities with single data source:", sum(variability_stats$n_sources == 1, na.rm = TRUE), "\n")
+cat("Cities with no data:", sum(variability_stats$n_sources == 0, na.rm = TRUE), "\n")
+cat("Mean CV across cities:", round(mean(variability_stats$cv_mass, na.rm = TRUE), 3), "\n")
+cat("Median CV across cities:", round(median(variability_stats$cv_mass, na.rm = TRUE), 3), "\n")
+cat("Range of CV:", round(range(variability_stats$cv_mass, na.rm = TRUE), 3), "\n")
+
+# List cities with single data source
+single_source_cities <- variability_stats %>%
+  filter(n_sources == 1) %>%
+  select(UC_NM_MN, CTR_MN_NM, population_2015, all_of(building_mass_cols)) %>%
+  arrange(desc(population_2015))
+
+cat("\n=== Cities with Single Data Source ===", "\n")
+if(nrow(single_source_cities) > 0) {
+  cat("Total:", nrow(single_source_cities), "cities\n\n")
+  
+  # Show which source each city has
+  for(i in 1:nrow(single_source_cities)) {
+    city_data <- single_source_cities[i, ]
+    available_sources <- building_mass_cols[!is.na(city_data[building_mass_cols])]
+    cat(paste0(i, ". ", city_data$UC_NM_MN, " (", city_data$CTR_MN_NM, ")"), "\n")
+    cat("   Population 2015:", format(city_data$population_2015, big.mark = ","), "\n")
+    cat("   Available source:", str_remove(available_sources, "BuildingMass_Total_"), "\n")
+    cat("   Mass value:", format(round(city_data[[available_sources]], 2), big.mark = ","), "Tg\n\n")
+  }
+} else {
+  cat("No cities with single data source found.\n")
+}
+```
+
+
+# Visualization 1: Coefficient of variation by city
+
+```{r}
+# First, let's examine the distribution of CV values for all cities
+all_cities_cv <- variability_stats %>%
+  filter(!is.na(cv_mass), n_sources >= 2)
+
+# Calculate distribution statistics
+cv_stats <- list(
+  n_cities = nrow(all_cities_cv),
+  median_cv = median(all_cities_cv$cv_mass, na.rm = TRUE),
+  mean_cv = mean(all_cities_cv$cv_mass, na.rm = TRUE),
+  min_cv = min(all_cities_cv$cv_mass, na.rm = TRUE),
+  max_cv = max(all_cities_cv$cv_mass, na.rm = TRUE),
+  q25_cv = quantile(all_cities_cv$cv_mass, 0.25, na.rm = TRUE),
+  q75_cv = quantile(all_cities_cv$cv_mass, 0.75, na.rm = TRUE)
+)
+
+cat("\n=== Coefficient of Variation Distribution Statistics ===\n")
+cat("Note: CV is calculated as standard deviation / mean for cities with 2+ data sources\n")
+cat("Cities with single data source cannot have CV calculated (variance = 0)\n\n")
+cat("Total cities with CV data:", cv_stats$n_cities, "\n")
+cat("Median CV:", round(cv_stats$median_cv, 4), "\n")
+cat("Mean CV:", round(cv_stats$mean_cv, 4), "\n")
+cat("Minimum CV:", round(cv_stats$min_cv, 4), "\n")
+cat("Maximum CV:", round(cv_stats$max_cv, 4), "\n")
+cat("25th percentile:", round(cv_stats$q25_cv, 4), "\n")
+cat("75th percentile:", round(cv_stats$q75_cv, 4), "\n")
+
+# Distribution histogram
+p1a <- ggplot(all_cities_cv, aes(x = cv_mass)) +
+  geom_histogram(bins = 30, fill = "#8da0cb", alpha = 0.7, color = "white", size = 0.3) +
+  geom_vline(xintercept = cv_stats$median_cv, color = "red", linetype = "dashed", size = 0.5) +
+  geom_vline(xintercept = cv_stats$mean_cv, color = "orange", linetype = "dashed", size = 0.5) +
+  labs(subtitle = paste0("n = ", cv_stats$n_cities, " cities with data from multiple sources"),
+       x = "Coefficient of Variation (CV)",
+       y = "Number of Cities") +
+  theme_bw() +
+  theme(
+    axis.ticks = element_line(colour = "black", size = 0.1),
+    axis.line = element_line(colour = "black", size = 0),
+    text = element_text(size = 8),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.background = element_blank(),
+    panel.border = element_rect(color = "black", fill = NA, size = 0.2),
+    plot.subtitle = element_text(size = 7, color = "gray30")
+  )
+
+print(p1a)
+
+# Export high-quality figures with golden ratio dimensions
+current_date <- Sys.Date()
+golden_ratio <- 1.618
+
+# Create figures directory if it doesn't exist
+if (!dir.exists("../figures")) {
+  dir.create("../figures", recursive = TRUE)
+}
+
+# Golden ratio dimensions (width:height = 1.618:1)
+fig_height <- 8  # cm
+fig_width <- fig_height * golden_ratio  # ≈ 12.94 cm
+
+# Export PDF
+ggsave(
+  filename = paste0("../figures/SuppFig_SourceVariability_CV_Distribution_", current_date, ".pdf"),
+  plot = p1a,
+  device = "pdf",
+  width = fig_width,
+  height = fig_height,
+  units = "cm",
+  dpi = 300
+)
+
+# Export PNG
+ggsave(
+  filename = paste0("../figures/SuppFig_SourceVariability_CV_Distribution_", current_date, ".png"),
+  plot = p1a,
+  device = "png",
+  width = fig_width,
+  height = fig_height,
+  units = "cm",
+  dpi = 300
+)
+
+cat("Figures exported with golden ratio dimensions (", round(fig_width, 1), "×", fig_height, " cm):\n",
+    paste0("../figures/SuppFig_SourceVariability_CV_Distribution_", current_date, ".pdf"), "\n",
+    paste0("../figures/SuppFig_SourceVariability_CV_Distribution_", current_date, ".png"), "\n")
+
+
+
+# Top 30 cities plot (updated with single color matching distribution figure)
+top_cities <- variability_stats %>%
+  filter(!is.na(cv_mass), n_sources >= 2) %>%
+  arrange(desc(population_2015)) %>%
+  slice_head(n = 30)
+
+p1b <- ggplot(top_cities, aes(x = reorder(UC_NM_MN, cv_mass), y = cv_mass)) +
+  geom_col(fill = "#8da0cb", alpha = 0.7, color = "white", size = 0.3) +
+  coord_flip() +
+  labs(x = "City",
+       y = "Coefficient of Variation") +
+  theme_bw() +
+  theme(
+    panel.border = element_rect(color = "black", fill = NA, size = 0.2),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.ticks = element_line(color = "black", size = 0.1),
+    axis.line = element_line(color = "black", size = 0),
+    axis.text = element_text(size = 8, color = "black"),
+    axis.title = element_text(size = 8, color = "black"),
+    text = element_text(size = 8),
+    panel.background = element_blank()
+  )
+
+print(p1b)
+
+# Export the figure with golden ratio dimensions
+current_date <- format(Sys.Date(), "%Y-%m-%d")
+golden_ratio <- 1.618
+
+# Create figures directory if it doesn't exist
+if (!dir.exists("../figures")) {
+  dir.create("../figures", recursive = TRUE)
+}
+
+# Golden ratio dimensions
+fig_height <- 8  # cm
+fig_width <- fig_height * golden_ratio  # ≈ 12.94 cm
+
+# Export as PNG only
+ggsave(paste0("../figures/SuppFig_SourceVariability_Top30Cities_", current_date, ".png"), 
+       plot = p1b, width = fig_width, height = fig_height, units = "cm", dpi = 300)
+
+cat("Figure exported to:", "\n",
+    paste0("../figures/SuppFig_SourceVariability_Top30Cities_", current_date, ".png"), "\n")
+
+p1c <- ggplot(top_cities, aes(x = reorder(UC_NM_MN, cv_mass), y = cv_mass, fill = CTR_MN_NM)) +
+  geom_col() +
+  coord_flip() +
+  scale_fill_viridis_d(name = "Country") +
+  labs(title = "Coefficient of Variation in Building Mass Estimates",
+       subtitle = "Top 30 cities by population with data from multiple sources",
+       x = "City",
+       y = "Coefficient of Variation",
+       caption = "Higher values indicate greater variability between data sources") +
+  theme_minimal() +
+  theme(axis.text.y = element_text(size = 8))
+
+print(p1c)
+```
+
+# Visualization 2: Source comparison scatter plots
+
+```{r}
+# Create scatter plots comparing different data sources
+data_long <- data %>%
+  select(UC_NM_MN, CTR_MN_NM, population_2015, all_of(building_mass_cols)) %>%
+  pivot_longer(cols = all_of(building_mass_cols), 
+               names_to = "source", 
+               values_to = "building_mass") %>%
+  filter(!is.na(building_mass)) %>%
+  mutate(source = str_remove(source, "BuildingMass_Total_"))
+
+# Pairwise comparisons
+source_pairs <- list(
+  c("Esch2022", "Li2022"),
+  c("Esch2022", "Liu2024"),
+  c("Li2022", "Liu2024")
+)
+
+for(i in 1:length(source_pairs)) {
+  pair <- source_pairs[[i]]
+  
+  # Prepare data for this pair
+  pair_data <- data_long %>%
+    filter(source %in% pair) %>%
+    pivot_wider(names_from = source, values_from = building_mass) %>%
+    filter(!is.na(.data[[pair[1]]]), !is.na(.data[[pair[2]]]))
+  
+  if(nrow(pair_data) > 0) {
+    # Calculate correlation
+    cor_val <- cor(pair_data[[pair[1]]], pair_data[[pair[2]]], use = "complete.obs")
+    
+    # Create plot
+    p <- ggplot(pair_data, aes_string(x = pair[1], y = pair[2])) +
+      geom_point(alpha = 0.6, color = "steelblue") +
+      geom_smooth(method = "lm", se = TRUE, color = "red") +
+      geom_abline(slope = 1, intercept = 0, linetype = "dashed", alpha = 0.5) +
+      scale_x_log10(labels = scales::scientific) +
+      scale_y_log10(labels = scales::scientific) +
+      labs(title = paste("Building Mass Comparison:", pair[1], "vs", pair[2]),
+           subtitle = paste("Correlation:", round(cor_val, 3), "| n =", nrow(pair_data), "cities"),
+           x = paste("Building Mass -", pair[1], "(tonnes)"),
+           y = paste("Building Mass -", pair[2], "(tonnes)"),
+           caption = "Dashed line represents perfect agreement (1:1)") +
+      theme_minimal() +
+      annotation_logticks()
+    
+    print(p)
+  }
+}
+```
+
+# Visualization 3: Variability vs. city size
+
+```{r}
+# Plot CV vs population size
+p3 <- variability_stats %>%
+  filter(!is.na(cv_mass), n_sources >= 2, population_2015 > 0) %>%
+  ggplot(aes(x = population_2015, y = cv_mass)) +
+  geom_point(alpha = 0.6, color = "steelblue") +
+  geom_smooth(method = "loess", se = TRUE, color = "red") +
+  scale_x_log10(labels = scales::comma) +
+  labs(title = "Data Source Variability vs. City Size",
+       subtitle = "Relationship between population and coefficient of variation in building mass estimates",
+       x = "Population (2015)",
+       y = "Coefficient of Variation",
+       caption = "Each point represents a city with data from multiple sources") +
+  theme_minimal() +
+  annotation_logticks(sides = "b")
+
+print(p3)
+```
+
+# Visualization 4: Box plots of data sources
+
+```{r}
+# Box plot comparing distributions across data sources with jittered raw data
+p4 <- data_long %>%
+  filter(building_mass > 0) %>%
+  ggplot(aes(x = source, y = building_mass, fill = source)) +
+  geom_boxplot(alpha = 0.7, outlier.shape = NA) +  # Remove outliers from boxplot to avoid duplication
+  geom_jitter(aes(color = source), alpha = 0.4, width = 0.2, size = 0.8) +  # Add jittered raw data points
+  scale_y_log10(labels = scales::scientific) +
+  scale_fill_viridis_d() +
+  scale_color_viridis_d() +  # Match colors for jitter points
+  labs(title = "Distribution of Building Mass Estimates by Data Source",
+       subtitle = "Boxplots with overlaid raw data points showing actual distribution",
+       x = "Data Source",
+       y = "Building Mass (tonnes)",
+       fill = "Source") +
+  theme_minimal() +
+  annotation_logticks(sides = "l") +
+  theme(legend.position = "none")
+
+print(p4)
+```
+
+# Statistical Analysis
+
+```{r}
+# Correlation analysis between data sources
+cor_data <- data %>%
+  select(all_of(building_mass_cols)) %>%
+  filter(complete.cases(.))
+
+if(nrow(cor_data) > 0) {
+  # Calculate correlation matrix
+  cor_matrix <- cor(cor_data, use = "complete.obs")
+  
+  # Simplify column and row names for cleaner visualization
+  simple_names <- c("Esch2022", "Li2022", "Liu2024")
+  colnames(cor_matrix) <- simple_names
+  rownames(cor_matrix) <- simple_names
+  
+  # Print correlation matrix
+  cat("Correlation matrix between data sources:\n")
+  print(round(cor_matrix, 3))
+  
+  # Create correlation plot
+  corrplot(cor_matrix, 
+           method = "color", 
+           type = "upper", 
+           order = "hclust",
+           addCoef.col = "black",
+           tl.col = "black",
+           tl.srt = 45,
+           title = "Correlation Between Building Mass Data Sources",
+           mar = c(0,0,2,0))
+}
+
+# ANOVA to test for systematic differences between sources
+anova_data <- data_long %>%
+  filter(!is.na(building_mass), building_mass > 0) %>%
+  mutate(log_mass = log10(building_mass))
+
+if(nrow(anova_data) > 0) {
+  anova_result <- aov(log_mass ~ source, data = anova_data)
+  cat("\nANOVA results (testing for systematic differences between sources):\n")
+  print(summary(anova_result))
+  
+  # Post-hoc test if ANOVA is significant
+  if(summary(anova_result)[[1]]["source", "Pr(>F)"] < 0.05) {
+    cat("\nPost-hoc pairwise comparisons (Tukey HSD):\n")
+    print(TukeyHSD(anova_result))
+  }
+}
+```
+
+# Summary and Key Findings
+
+```{r}
+# Summary statistics
+cat("=== DATA SOURCE VARIABILITY ANALYSIS SUMMARY ===\n\n")
+
+cat("Dataset Overview:\n")
+cat("- Total cities in dataset:", nrow(data), "\n")
+cat("- Cities with multiple data sources:", sum(variability_stats$n_sources >= 2, na.rm = TRUE), "\n")
+cat("- Cities with all three sources:", sum(variability_stats$n_sources == 3, na.rm = TRUE), "\n\n")
+
+cat("Variability Statistics:\n")
+cat("- Mean coefficient of variation:", round(mean(variability_stats$cv_mass, na.rm = TRUE), 3), "\n")
+cat("- Median coefficient of variation:", round(median(variability_stats$cv_mass, na.rm = TRUE), 3), "\n")
+cat("- Standard deviation of CV:", round(sd(variability_stats$cv_mass, na.rm = TRUE), 3), "\n")
+cat("- Range of CV:", paste(round(range(variability_stats$cv_mass, na.rm = TRUE), 3), collapse = " - "), "\n\n")
+
+# Identify cities with highest and lowest variability
+high_var_cities <- variability_stats %>%
+  filter(!is.na(cv_mass)) %>%
+  arrange(desc(cv_mass)) %>%
+  slice_head(n = 5)
+
+low_var_cities <- variability_stats %>%
+  filter(!is.na(cv_mass)) %>%
+  arrange(cv_mass) %>%
+  slice_head(n = 5)
+
+cat("Cities with highest variability (top 5):\n")
+for(i in 1:nrow(high_var_cities)) {
+  cat(paste0(i, ". ", high_var_cities$UC_NM_MN[i], " (", high_var_cities$CTR_MN_NM[i], "): CV = ", 
+             round(high_var_cities$cv_mass[i], 3), "\n"))
+}
+
+cat("\nCities with lowest variability (top 5):\n")
+for(i in 1:nrow(low_var_cities)) {
+  cat(paste0(i, ". ", low_var_cities$UC_NM_MN[i], " (", low_var_cities$CTR_MN_NM[i], "): CV = ", 
+             round(low_var_cities$cv_mass[i], 3), "\n"))
+}
+
+cat("\n=== END SUMMARY ===\n")
+```
+
+# Analysis Complete
+
+*Note: Dataset comparison analysis (Zhou vs Esch) has been moved to a separate file: `Fig1_DatasetComparison_Zhou_vs_Esch.qmd`*
+
+```
+

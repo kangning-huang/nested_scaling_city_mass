@@ -1,0 +1,525 @@
+---
+title: "R Notebook"
+output: html_notebook:null
+---
+input: 
+MasterMass_ByClass20250616.csv (fixed an error from Esch2022; fixed negative OtherPav，fixed climate code issue)
+HistTrend20240924.csv
+
+ouput: Figure 1
+
+```{r}
+rm(list=ls())
+```
+
+# 1. Packges, function, parameters
+```{r}
+# library
+library(pacman)
+p_load(tidyverse,gridGraphics,zoo,scales,broom,Rmisc,maps,mapdata,patchwork)
+```
+
+# 2. Input
+```{r}
+DF_MassByClass <- read.csv("../data/processed/MasterMass_ByClass20250616.csv",stringsAsFactors = FALSE)
+
+DF_HistTrend <- read.csv("../data/processed/HistTrend20240924.csv",stringsAsFactors = FALSE)
+```
+
+# 3. Processing
+wrangling, stats, visualization 
+```{r}
+(DF_MassByClass) %>%
+  filter(UC_NM_MN=="Honolulu")
+```
+
+## for panel 3 boxplot 
+```{r}
+DF_mass_long<-DF_MassByClass %>%
+  mutate(human_mass_tons = population_2015 * 50 / 1000) %>%
+  pivot_longer(
+    cols = c(
+      total_built_mass_tons,
+      BuildingMass_AverageTotal,
+      mobility_mass_tons,
+      total_dryBiomass_tons,
+      human_mass_tons
+    ),
+    names_to  = "MassType_raw",
+    values_to = "MassValue"
+  ) %>%
+  mutate(
+    MassType = case_when(
+      MassType_raw == "total_built_mass_tons"     ~ "TotalBuilt",
+      MassType_raw == "BuildingMass_AverageTotal" ~ "Buildings",
+      MassType_raw == "mobility_mass_tons"         ~ "MobilityInfra",
+      MassType_raw == "total_dryBiomass_tons"     ~ "Vegetation",
+      MassType_raw == "human_mass_tons"           ~ "Human",
+      TRUE                                         ~ MassType_raw
+    ),
+    MassType = factor(
+      MassType,
+      levels = c("TotalBuilt", "Buildings", "MobilityInfra", "Vegetation", "Human")
+    )
+  ) %>%
+  select(
+    ID_HDC_G0,
+    UC_NM_MN,
+    CTR_MN_ISO,
+    CTR_MN_NM,
+    GRGN_L1,
+    GRGN_L2,
+    population_2015,
+    lat,
+    lon,
+    MassType,
+    MassValue
+  )
+
+DF_mass_long
+
+# 7. Panel 3 (Boxplot of Mass ratios)
+RankedMass <- DF_mass_long %>%
+  filter(MassValue > 0) %>%
+  mutate(
+    MassBaseline = population_2015 * 50 / 1000,
+    Ratio = MassValue / MassBaseline
+  ) %>%
+  dplyr::group_by(MassType) %>%
+  dplyr::summarise(
+    medianRatio = median(Ratio, na.rm = TRUE),
+    q25         = quantile(Ratio, 0.25, na.rm = TRUE),
+    q75         = quantile(Ratio, 0.75, na.rm = TRUE)
+  ) %>%
+  arrange(desc(medianRatio))
+
+RankedMass
+```
+
+
+# 4. Ouput
+## Panel 1 Historical trend 
+```{r}
+head(DF_HistTrend)
+tail(DF_HistTrend)
+# Apply linear interpolation to the missing values in PerCapBiomass
+
+# Convert the data to long format for easier plotting
+DF_HistTrend_long <- DF_HistTrend %>%
+  pivot_longer(cols = c("PerCapBuiltMass", "PerCapBiomass"),
+               names_to = "MassType", values_to = "PerCapMass")
+
+# Create the plot with a single Y-axis and custom theme
+Fig.Trend<-ggplot(DF_HistTrend_long, aes(x = Year, y = PerCapMass, color = MassType, linetype = (MassType))) +
+  
+  # Plot both PerCap Built Mass and PerCap Biomass
+  geom_line(size = 0.75) +
+  geom_hline(yintercept = 1000, linetype = 3, size = 0.3, color = "gray")+
+  geom_hline(yintercept = 10, linetype = 3, size = 0.3, color = "gray")+
+   geom_hline(yintercept = 300, linetype = 3, size = 0.3, color = "gray")+
+  geom_hline(yintercept = 100, linetype = 3, size = 0.3, color = "gray")+
+    geom_hline(yintercept = 30, linetype = 3, size = 0.3, color = "gray")+
+  # Highlight the two endpoints of the BuiltMass curve (Year 1900 and 2023)
+  geom_point(data = DF_HistTrend_long %>% filter(MassType == "PerCapBuiltMass" & Year %in% c(1900, 2023)),
+             aes(x = Year, y = PerCapMass),pch = 21, color = "black", size = 3) +
+  # Add labels near the trends
+annotate("text", x = 1925, y = 350, label = "Vegetation", color = "black", hjust = -0.2, size = 2) +
+annotate("text", x = 1925, y = 25, label = "Built stock", color = "black", hjust = -0.2, size = 2)+
+  # Add annotations near the 1900 and 2023 points
+annotate("text", x = 1900, y = 35, label = "22t/cap; 430x", color = "black", hjust = 0.2, size = 2) +
+annotate("text", x = 2023, y = 300, label = "205t/cap; 4090x ", color = "black", hjust = 1, size = 2)+
+  # Single Y-axis for both series
+  scale_y_continuous(trans = "log10",
+                     limits = c(10, 1030),
+                     breaks = c(10,30,100,300,1000),
+                     name = "Per capita mass (t/cap)") +
+  
+  # Add labels and theme
+  scale_x_continuous(limits = c(1900,2025),
+                     breaks = c(1900,1920,1940,1960,1980,2000,2020),
+                     name = NULL) +
+  # Use theme_bw() and customize the theme
+  theme_bw() +  
+  theme(
+    axis.ticks = element_line(colour = "black", size = 0.1),
+    axis.line = element_line(colour = "black", size = 0),
+    text = element_text(size = 8),
+    axis.text.x = element_text(angle = 360, hjust = 0.5, vjust = 0),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.background = element_blank(),
+    legend.position = "none"
+  ) +
+  # Customize color scheme
+  scale_color_manual(values = c("PerCapBuiltMass" = "#8da0cb", 
+                                "PerCapBiomass" = "#66c2a5")) +
+  scale_linetype_manual(values = c("PerCapBuiltMass" = "solid", 
+                                 "PerCapBiomass" = "longdash"))
+
+Fig.Trend
+
+# 
+# # Add annotations for the reference lines
+#   annotate("text", x = 2030, y = 1000, label = "1000t/cap", vjust = 0, color = "black",size = 2) +
+#   annotate("text", x = 2030, y = 10, label = "10t/cap", vjust = 0, color = "black",size = 2) +
+#   annotate("text", x = 2030, y = 300, label = "300t/cap", vjust = 0, color = "black",size = 2) +
+#   annotate("text", x = 2030, y = 100, label = "100t/cap", vjust = 0, color = "black",size = 2) +
+#    annotate("text", x = 2030, y = 30, label = "30t/cap", vjust = 0, color = "black",size = 2) +
+```
+
+At 1900, per cap mass 21.5t/cap, 36Gt in total (Built ratio 430X), per cap vegetation 694 t/cap 
+At 2023, 205t/cap, 1655 Gt in total, 4090X. 138t/cap 
+
+## Panel 2 Global map
+```{r}
+
+# Filter the main dataset to exclude these cities
+DF_MassLong_filtered <- DF_mass_long %>%
+  dplyr::filter(MassType == "TotalBuilt") # we only need one cooridnate for each city
+head(DF_MassLong_filtered)
+# Create a world map
+worldDF <- map_data("world")
+
+# Initialize the ggplot object with the world map
+mp <- ggplot() + 
+  geom_polygon(data = worldDF, aes(x = long, y = lat, group = group),
+               fill = "gray97", color = "darkgray") +
+  theme_bw() +
+  theme(axis.ticks = element_line(colour = "black", size = 0.1),
+        axis.line = element_line(colour = "black", size = 0),
+        text = element_text(size = 8),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_rect(fill = "#DAE7EB", color = NA))
+
+# Add points for cities with population larger than 50,000
+global_map <- mp +
+  scale_x_continuous(name = NULL, 
+                     breaks = seq(-180, 180, 60),
+                     labels = paste0(seq(-180, 180, 60), "°"),
+                     expand = c(0.01, 0.01)) + 
+  scale_y_continuous(name = NULL,
+                     breaks = seq(-90, 90, 30),
+                     labels = paste0(seq(-90, 90, 30), "°"),
+                     expand = c(0.01, 0.01),
+                     position = "left") + 
+  coord_quickmap(ylim = c(-90, 90), xlim = c(-180, 180)) + 
+  geom_point(data = DF_MassLong_filtered, aes(x = lon, y = lat), 
+             shape = 21, size = 1, stroke = 0.3, color = "black", fill = NA,
+             alpha = 0.8, show.legend = FALSE)
+
+# # Highlight specific city, e.g., "Shanghai", if present in the dataset
+# global_map <- global_map +
+#   geom_point(data = subset(DF_MassLong_filtered, UC_NM_MN == "Shanghai"), aes(x = longitude, y = latitude), 
+#              shape = 21, size = 3, stroke = 0.5, color = "black", 
+#              fill = "black", show.legend = FALSE)
+
+# Display the global map
+print(global_map)
+```
+
+## Panel bar plot
+
+```{r}
+### STEP 1: Compute Proportions for Built Structure Mass
+df_mass <- DF_mass_long %>%
+  filter(MassType == "TotalBuilt") %>%
+  filter(!is.na(MassValue) & MassValue > 0)
+
+total_mass <- sum(df_mass$MassValue, na.rm = TRUE)
+
+top100_mass <- df_mass %>%
+  arrange(desc(MassValue)) %>%
+  slice(1:100) %>%
+  summarise(sum_mass = sum(MassValue, na.rm = TRUE)) %>%
+  pull(sum_mass)
+
+rest_mass <- total_mass - top100_mass
+
+# Compute the proportions (they will sum to 1)
+top100_mass_prop <- top100_mass / total_mass
+rest_mass_prop   <- rest_mass / total_mass
+
+### STEP 2: Compute Proportions for Human Population
+# Here we use df_mass for the population calculation; adjust if needed.
+df_pop <- df_mass %>%
+  filter(!is.na(population_2015) & population_2015 > 0)
+
+total_pop <- sum(df_pop$population_2015, na.rm = TRUE)
+
+top100_pop <- df_pop %>%
+  arrange(desc(population_2015)) %>%
+  slice(1:100) %>%
+  summarise(sum_pop = sum(population_2015, na.rm = TRUE)) %>%
+  pull(sum_pop)
+
+rest_pop <- total_pop - top100_pop
+
+top100_pop_prop <- top100_pop / total_pop
+rest_pop_prop   <- rest_pop / total_pop
+
+### STEP 3: Prepare Data in Long Format
+plot_data <- data.frame(
+  Measure = c("Built Structure", "Built Structure", 
+              "Population", "Population"),
+  Category = c("top100", "rest", "top100", "rest"),
+  Proportion = c(top100_mass_prop, rest_mass_prop, top100_pop_prop, rest_pop_prop)
+)
+
+# Reorder Measure factor so that Built Structure Mass appears on top (after coord_flip)
+plot_data$Measure <- factor(plot_data$Measure, levels = c("Built Structure","Population"))
+
+# Create a new "Fill" column that sets the colors based on Measure and Category
+plot_data <- plot_data %>%
+  mutate(Fill = ifelse(
+    Measure == "Built Structure",
+    ifelse(Category == "top100", "#8da0cb", scales::alpha("#8da0cb", 0.3)),
+    ifelse(Category == "top100", "darkgray", "lightgray")
+  ))
+
+### STEP 4: Create the Horizontal Stacked Bar Plot
+Fig.top100 <- ggplot(plot_data, aes(x = Measure, y = Proportion, fill = Fill)) +
+  geom_bar(stat = "identity", width = 0.65) +
+  geom_text(aes(label = paste0(Category, "\n", round(Proportion * 100, 0), "%")),
+            position = position_stack(vjust = 0.5),
+            color = "black", size = 2.5) +
+  scale_y_continuous(labels = percent_format(), limits = c(0, 1.05), expand = c(0.005, 0.005)) +
+  scale_fill_identity() +
+  labs(x = NULL, y = NULL) +
+  theme_bw() +
+  theme(
+    panel.grid        = element_blank(),
+    legend.position   = "none",
+    axis.text.y         = element_blank(),
+    axis.ticks        = element_blank(),
+    plot.background   = element_blank(),  # Also remove outer white box
+    text = element_text(size = 8),
+        panel.border     = element_rect(color = "black", fill = NA, size = 0.2),  # Visible box border
+  )
+# Display the plot
+print(Fig.top100)
+```
+## Ratios between total built and human bodies
+```{r}
+library(dplyr)
+
+
+names(DF_mass_long)
+
+
+# 1) New York ratio
+ny_totalbuilt <- DF_mass_long %>%
+  filter(UC_NM_MN == "New York", MassType == "TotalBuilt") %>%
+  pull(MassValue) %>%
+  sum(na.rm = TRUE)
+
+ny_human <- DF_mass_long %>%
+  filter(UC_NM_MN == "New York", MassType == "Human") %>%
+  pull(MassValue) %>%
+  sum(na.rm = TRUE)
+
+ny_ratio <- ny_totalbuilt / ny_human
+cat("New York ratio =", round(ny_ratio, 2), "\n")
+
+
+# 2) USA‑wide ratio (sum across all cities in your DF)
+usa_totalbuilt <- DF_mass_long %>%
+  filter(CTR_MN_ISO == "USA") %>%
+  filter(MassType == "TotalBuilt") %>%
+  pull(MassValue) %>%
+  sum(na.rm = TRUE)
+
+usa_human <- DF_mass_long %>%
+  filter(CTR_MN_ISO == "USA") %>%
+  filter(MassType == "Human") %>%
+  pull(MassValue) %>%
+  sum(na.rm = TRUE)
+
+usa_ratio <- usa_totalbuilt / usa_human
+cat("USA ratio =", round(usa_ratio, 2), "\n")
+
+
+# 3) Shanghai ratio
+Shanghai_totalbuilt <- DF_mass_long %>%
+  filter(UC_NM_MN == "Shanghai", MassType == "TotalBuilt") %>%
+  pull(MassValue) %>%
+  sum(na.rm = TRUE)
+
+Shanghai_human <- DF_mass_long %>%
+  filter(UC_NM_MN == "Shanghai", MassType == "Human") %>%
+  pull(MassValue) %>%
+  sum(na.rm = TRUE)
+
+Shanghai_ratio <- Shanghai_totalbuilt / Shanghai_human
+cat("Shanghai ratio =", round(Shanghai_ratio, 2), "\n")
+
+
+# 4) Global ratio
+Global_totalbuilt <- DF_mass_long %>%
+  filter(MassType == "TotalBuilt") %>%
+  pull(MassValue) %>%
+  sum(na.rm = TRUE)
+
+Global_human <- DF_mass_long %>%
+  filter(MassType == "Human") %>%
+  pull(MassValue) %>%
+  sum(na.rm = TRUE)
+
+Global_ratio <- Global_totalbuilt / Global_human
+cat("Global ratio =", round(Global_ratio, 2), "\n")
+
+
+
+```
+
+## Panel 3 Boxplot
+```{r}
+# Set seed for reproducibility
+set.seed(123)
+DF_mass_long <- DF_mass_long %>%
+  filter(MassValue > 0, population_2015 > 0) %>%
+  mutate(MassType = factor(MassType, levels = c("Human", "Vegetation", "MobilityInfra", "Buildings", "TotalBuilt")))
+
+# Export the data used for Fig.Box
+DF_mass_long %>%
+  filter(MassValue > 0, population_2015 > 0) %>%
+  select(ID_HDC_G0, UC_NM_MN, CTR_MN_ISO, CTR_MN_NM, GRGN_L1, GRGN_L2, 
+         population_2015, lat, lon, MassType, MassValue) %>%
+  write.csv(paste0("../results/Fig1_BoxplotData_", format(Sys.Date(), "%Y%m%d"), ".csv"), 
+            row.names = FALSE)
+
+# Calculate the y positions for the annotations
+y_positions <- DF_mass_long %>%
+  filter(MassValue > 0, population_2015 > 0) %>%
+  group_by(MassType) %>%
+  dplyr::summarize(y = quantile(MassValue,0.02))
+
+y_positions
+
+# Define the reference points and corrected labels
+annotation_df_left <- data.frame(
+  y = c(1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10),
+  label = c("1 kilotonne",
+            "10 kilotonne",
+            "100 kilotonne",
+            "1 megatonne",
+            "10 megatonne",
+            "100 megatonne",
+            "1 gigatonne",
+            "10 gigatonne"),
+  side = rev(c("right", "right", "right", "right","right", "right", "right", "right"))
+)
+
+# Filter and plot
+Fig.Box <- DF_mass_long %>% 
+  filter(MassValue > 0, population_2015 > 0) %>%
+  ggplot() +
+  geom_jitter(aes(x = MassType, y = MassValue, fill = MassType),
+            size = 0.8, pch = 21, width = 0.2, stroke = 0.3, alpha = 0.6) +
+  # --------------------------------------------
+  geom_boxplot(aes(x = MassType, y = MassValue, fill = MassType),
+               width = 0.6, alpha = 0.6, outlier.shape = NA, lwd = 0.3, fatten = 1.2) +
+  geom_hline(yintercept = 5628.294, linetype = 2, size = 0.3, color = "red") +
+  geom_hline(yintercept = 1e3, linetype = 3, size = 0.3, color = "gray")+
+  geom_hline(yintercept = 1e6, linetype = 3, size = 0.3, color = "gray")+
+  geom_hline(yintercept = 1e9, linetype = 3, size = 0.3, color = "gray")+
+  geom_hline(yintercept = 1e4, linetype = 3, size = 0.3, color = "gray")+
+  geom_hline(yintercept = 1e5, linetype = 3, size = 0.3, color = "gray")+
+  geom_hline(yintercept = 1e7, linetype = 3, size = 0.3, color = "gray")+
+  geom_hline(yintercept = 1e8, linetype = 3, size = 0.3, color = "gray")+
+  geom_hline(yintercept = 1e10, linetype = 3, size = 0.3, color = "gray")+
+  scale_y_log10(name = "Mass of urban components per city (tonnes)",
+                limits = c(300, 10^10.3),
+                breaks = c(1e3, 1e4,1e5,1e6, 1e7,1e8,1e9,1e10),
+                labels = scales::trans_format("log10", scales::math_format(10^.x)),
+                expand = c(0, 0)) +
+  scale_x_discrete(name = NULL, expand = expansion(mult = c(0.1, 0.3))) +
+  scale_fill_manual(values = c("TotalBuilt" = "#8da0cb", 
+                             "Human" = "lightgray", 
+                             "Vegetation" = "#66c2a5", 
+                             "Buildings" = "#8da0cb",
+                             "MobilityInfra" = "#8da0cb")) +
+  theme_bw() +  
+  theme(axis.ticks = element_line(colour = "black", size = 0.1),
+        axis.line = element_line(colour = "black", size = 0),
+        text = element_text(size = 8),
+        axis.text.x = element_text(angle = 360, hjust = 0.5, vjust = 0),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none") +  
+  geom_text(data = y_positions, aes(x = MassType, y = y, label = (c("1", "64", "2264","2613", "5124"))), 
+            size = 2, fontface = "bold", vjust = 6) +
+  # Conditional Text for Annotations: left-side and right-side labels
+  geom_text(data = subset(annotation_df_left, side == "right"), 
+            aes(x = Inf, y = y, label = label),
+            hjust = 1.1, vjust = 0.5, 
+            size = 1.8, color = "gray30",
+            fontface = "italic",
+            check_overlap = TRUE) 
+  # coord_flip()
+#66c2a5
+
+
+Fig.Box
+```
+
+# Assemble the final figure
+
+A new version with bar on the right
+```{r}
+left_side <- Fig.Trend / global_map  # +plot_layout(heights = c(1.5, 2))
+
+combined_plot <- left_side | Fig.Box| Fig.top100
+combined_plot <- combined_plot + plot_layout(widths = c(5, 8, 3))
+
+combined_plot
+
+# Get the current date
+current_date <- Sys.Date()
+
+# Save the plot with the date in the filename
+ggsave(
+  filename = paste0("../figures/Fig1_TrendBoxplot_", current_date, ".pdf"), # Add date to filename
+  plot = combined_plot,
+  device = "pdf",
+  width = 22,     # Width in cm
+  height = 10,     # Height in cm
+  units = "cm",   # Units in centimeters
+  dpi = 300       # High resolution
+)
+```
+
+
+
+```{r}
+combined_plot <-  (Fig.Trend|global_map)/Fig.Box
+
+combined_plot <- combined_plot + plot_layout(heights = c(1, 3), widths = c(2,3))
+combined_plot
+```
+
+```{r}
+combined_plot <-  (Fig.Trend/global_map)|Fig.Box
+
+combined_plot <- combined_plot + plot_layout(widths = c(5,8))
+combined_plot
+
+# Get the current date
+current_date <- Sys.Date()
+
+# Save the plot with the date in the filename
+# ggsave(
+#   filename = paste0("../figures/Fig1_TrendBoxplot_", current_date, ".pdf"), # Add date to filename
+#   plot = combined_plot,
+#   device = "pdf",
+#   width = 18,     # Width in cm
+#   height = 10,     # Height in cm
+#   units = "cm",   # Units in centimeters
+#   dpi = 300       # High resolution
+# )
+```
+
+
+
+

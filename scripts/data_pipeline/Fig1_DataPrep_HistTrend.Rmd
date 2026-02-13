@@ -1,0 +1,93 @@
+---
+title: "R Notebook"
+output: html_notebook:null
+---
+
+
+```{r}
+rm(list=ls())
+```
+
+# 1. Packges, function, parameters
+```{r}
+# library
+library(pacman)
+p_load(tidyverse,gridGraphics,zoo)
+```
+
+# 2. Input
+```{r}
+list.files("../data/Elhacham2020")
+anthropogenic_mass2015 <- read.csv("../data/Elhacham2020/anthropogenic_mass_2015.csv")
+anthropogenic_mass2037 <- read.csv("../data/Elhacham2020/anthropogenic_mass_2037.csv")
+
+biomass_dry <- read.csv("../data/Elhacham2020/biomass_dry.csv")
+biomass_dry
+population <- read.csv("../data/Elhacham2020/population.csv")
+
+population
+anthropogenic_mass2037
+```
+
+
+```{r}
+head(anthropogenic_mass2015)
+head(anthropogenic_mass2037)
+
+anthropogenic_mass <- rbind(anthropogenic_mass2015[-nrow(anthropogenic_mass2015), ] ,anthropogenic_mass2037)
+(anthropogenic_mass)
+biomass_dry
+ # Filter for global population
+population_global <- population %>%
+  dplyr::filter(Entity == "World") %>%
+  dplyr::select(Year, Population)
+population_global
+# Merge datasets by Year
+combined_data <- left_join(anthropogenic_mass, biomass_dry, by = c("Year" = "year"))
+combined_data <- left_join(combined_data, population_global, by = "Year")
+
+combined_data
+```
+
+
+```{r}
+# Calculate total anthropogenic mass and per capita values
+combined_data <- combined_data %>%
+  mutate(biomass..Tt. = zoo::na.approx(biomass..Tt., Year, na.rm = FALSE))%>%
+  mutate(Total_Anthropogenic_Mass = concrete + aggregates..gravel.etc.. + bricks + asphalt + metals + 
+                                       other..plastic.etc.. + waste,
+         Per_Capita_Anthropogenic_Mass = (Total_Anthropogenic_Mass * 1e12) / Population,  # Convert to ton per person 1Tt
+         Per_Capita_Biomass = (biomass..Tt. * 1e12) / Population)  # Convert biomass to t per person
+combined_data
+# Convert per capita values from kg/person to kilotonnes/person and then to dimensionless ratios based on 50 kg per person
+combined_data <- combined_data %>%
+  mutate(Anthropogenic_Mass_per_Body = (Per_Capita_Anthropogenic_Mass) / (50/1000) ,  # Anthropogenic mass in body equivalents
+         Biomass_per_Body = (Per_Capita_Biomass) / (50/1000) )  # Biomass in body equivalents
+
+```
+
+# Exporting data
+```{r}
+combined_data<-combined_data %>%
+  select(Year,biomass..Tt.,Population,Total_Anthropogenic_Mass,Per_Capita_Anthropogenic_Mass,Per_Capita_Biomass,Anthropogenic_Mass_per_Body,Biomass_per_Body) %>%
+  mutate(BiomassGt = 1000*biomass..Tt.,
+         TotalBuiltMassGt = Total_Anthropogenic_Mass*1000)  %>%
+  select(-biomass..Tt.,-Total_Anthropogenic_Mass) %>%
+         rename(PerCapBuiltMass = Per_Capita_Anthropogenic_Mass,
+         PerCapBiomass = Per_Capita_Biomass,
+         BuiltMassRatio = Anthropogenic_Mass_per_Body,
+         BiomassRatio = Biomass_per_Body) %>%
+  filter(!is.na(Population))
+
+combined_data
+
+# Create a filename with the current date
+file_name <- paste0("HistTrend", format(Sys.Date(), "%Y%m%d"), ".csv")
+
+# Export the filtered data without row numbers
+write.csv(combined_data, file_name, row.names = FALSE)
+```
+
+
+
+

@@ -1,0 +1,619 @@
+---
+title: "h3_hexagons_city_country_nested_mixed_model_updatedMI"
+date: "2025-6-6"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# Load required libraries
+library(pacman)
+pacman::p_load(Matrix,sf,lme4,readr,dplyr,performance,tibble,ggplot2,rprojroot,scales,viridis,cowplot,tidyr,ggspatial,moments,poweRlaw)
+```
+
+This notebook analyzes neighborhood-level scaling patterns using H3 hexagonal grids to examine how material stocks scale with population at the sub-city level.
+
+## Aggregate data at city level and run scaling
+
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(lme4)
+library(ggplot2)
+library(moments) # for skewness calculation
+library(poweRlaw) # for power-law fitting
+
+# Set working directory
+# setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+
+# Step 1: Load and Preprocess Data
+mass_avg_data <- readr::read_csv(
+  # file.path("..", "results", "global_scaling", "mass_avg_Li2022_vs_Liu2024_H3_grids_world.csv")
+  file.path("..", "data", "processed", "Fig3_Mass_Neighborhood_H3_Resolution6_2025-06-24.csv")
+  ) %>%
+  dplyr::select(
+    mass_building = BuildingMass_AverageTotal,
+    mass_mobility = mobility_mass_tons,
+    mass_avg = total_built_mass_tons,
+    population = population_2015,
+    city_id = ID_HDC_G0,
+    country_iso = CTR_MN_ISO
+  ) %>%
+  dplyr::filter(population > 0) %>%
+  dplyr::filter(mass_avg > 0)  # Filter out zero values
+
+# Step 2: Aggregate Data at City Level
+# Aggregate at city level by summing population and mass_avg
+city_level_data <- mass_avg_data %>%
+  group_by(city_id) %>%
+  summarise(
+    population = sum(population, na.rm = TRUE),
+    mass_avg = sum(mass_avg, na.rm = TRUE),
+    country_iso = first(country_iso)
+  )
+
+# Step 3: Filter Countries with at Least 5 Cities
+country_counts <- city_level_data %>%
+  group_by(country_iso) %>%
+  summarise(city_count = n()) %>%
+  filter(city_count >= 5)
+
+city_level_data <- city_level_data %>%
+  filter(country_iso %in% country_counts$country_iso) %>%
+  filter(population > 50000)
+
+# Step 4: Nested Random-Effects Model
+# Log-transform population and mass_avg
+city_level_data <- city_level_data %>%
+  mutate(
+    log_population = log10(population),
+    log_mass_avg = log10(mass_avg)
+  )
+
+# Run the random effects model using country as the random effect
+model <- lmer(log_mass_avg ~ log_population + (1 | country_iso), data = city_level_data)
+print(summary(model))
+
+# Step 5: Calculate Normalized Log Mass Avg
+# Extract fixed intercept and random effect for country
+fixed_intercept <- fixef(model)
+ranef_country <- ranef(model)$country_iso
+slope <- fixef(model)["log_population"]
+
+# Calculate normalized_log_mass_avg for each city
+city_level_data <- city_level_data %>%
+  rowwise() %>%
+  mutate(
+    ranef_Country = ranef_country[country_iso, "(Intercept)"],
+    normalized_log_mass_avg = log_mass_avg - fixed_intercept[[1]] - ranef_Country,
+    cmi = 10^(log_mass_avg-ranef_Country) / 10^(slope*log_population)
+  )
+
+ggplot(city_level_data,
+       aes(x=cmi)) +
+  geom_histogram() +
+  scale_x_log10() +
+  annotation_logticks(sides = "b") +
+  theme_bw()
+
+# Calculate skewness of the distribution of population (log-transformed) within each city
+skewness_df <- mass_avg_data %>%
+  dplyr::group_by(city_id) %>%
+  dplyr::mutate(log_pop = log10(population)) %>%
+  dplyr::summarize(
+    skewness_pop = moments::skewness(population, na.rm = TRUE)
+  )
+
+# Test for log-normality in each city
+normality_tests <- mass_avg_data %>%
+  dplyr::group_by(city_id) %>%
+  dplyr::mutate(log_pop = log10(population)) %>%
+  dplyr::summarize(
+    shapiro_p_value = ifelse(n() < 3, NA, shapiro.test(log_pop)$p.value) # Shapiro-Wilk test (requires at least 3 samples)
+  )
+
+normality_tests$shapiro_p_value %>% hist()
+
+# Fit power-law distribution to population data within each city
+power_law_results <- mass_avg_data %>%
+  group_by(city_id) %>%
+  summarize(
+    population = list(population) # Store population as a list for poweRlaw
+  ) %>%
+  rowwise() %>%
+  mutate(
+    power_law_fit = list({
+      if (length(unlist(population)) > 5) {
+        # Create power-law object and estimate parameters
+        pl <- conpl$new(unlist(population))
+        est <- estimate_xmin(pl)
+        pl$setXmin(est)
+        list(alpha = est$pars, xmin = est$xmin)
+      } else {
+        list(alpha = NA, xmin = NA)
+      }
+    })
+  ) %>%
+  mutate(
+    alpha = power_law_fit$alpha,
+    xmin = power_law_fit$xmin
+  ) %>%
+  select(city_id, alpha, xmin)
+
+
+city_level_data %>%
+  left_join(power_law_results, by = "city_id") %>%
+  ggplot(aes(x = alpha, y = cmi)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = TRUE) +
+  xlim(0,10) +
+  theme_minimal() +
+  labs(
+    x = "Alpha (Pop Power-Law Distribution)",
+    y = "City CMI"
+  )
+
+
+```
+
+## Load the H3 hexagon grids and run nested mixed model
+
+```{r}
+# Load necessary libraries
+library(lme4)
+library(dplyr)
+library(ggplot2)
+library(readr)
+library(tibble)
+
+# Set wording directory
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+
+data <- readr::read_csv(
+  # file.path("..", "results", "global_scaling", "mass_avg_Li2022_vs_Liu2024_H3_grids_world.csv")
+  file.path("..", "results", "global_scaling", "Fig3_Mass_Neighborhood_H3_Resolution6_2025-06-24.csv")
+  ) %>%
+  dplyr::rename(
+    mass_building = BuildingMass_AverageTotal,
+    mass_mobility = mobility_mass_tons,
+    mass_avg = total_built_mass_tons,
+    population = population_2015,
+    city_id = ID_HDC_G0,
+    country_iso = CTR_MN_ISO,
+    country = CTR_MN_NM
+  ) %>%
+  dplyr::filter(population > 0) %>%
+  dplyr::filter(mass_avg > 0)
+
+# Filter the data to select countries with more than 5 cities
+country_city_counts <- data %>%
+  dplyr::group_by(country_iso) %>%
+  dplyr::summarize(num_cities = n_distinct(city_id)) %>%
+  dplyr::filter(num_cities >= 3)
+
+filtered_data <- data %>%
+  dplyr::filter(country_iso %in% country_city_counts$country_iso)
+
+# Filter the data to select cities with total population greater than 50,000
+city_population_totals <- filtered_data %>%
+  dplyr::group_by(country_iso, city_id) %>%
+  dplyr::summarize(total_population = sum(population)) %>%
+  dplyr::filter(total_population > 50000)
+
+filtered_data <- filtered_data %>%
+  dplyr::filter(city_id %in% city_population_totals$city_id)
+
+# Filter the data to select cities with more than 10 neighborhoods
+city_neighborhood_counts <- filtered_data %>%
+  dplyr::group_by(country_iso, city_id) %>%
+  dplyr::summarize(num_neighborhoods = n()) %>%
+  dplyr::filter(num_neighborhoods > 3)
+
+filtered_data <- filtered_data %>%
+  dplyr::filter(city_id %in% city_neighborhood_counts$city_id)
+
+# Log-transform variables
+filtered_data <- filtered_data %>%
+  mutate(
+    log_population = log10(population),
+    log_mass_avg = log10(mass_avg)
+  )
+
+# Create hierarchical factors
+filtered_data$Country <- factor(filtered_data$country)
+filtered_data$Country_City <- factor(with(filtered_data, paste(Country, city_id, sep = "_")))
+
+# Fit the nested random-effects model
+model <- lmer(log_mass_avg ~ log_population + (1 | Country) + (1 | Country:Country_City), data = filtered_data)
+
+# Extract fixed effects
+fixed_intercept <- fixef(model)["(Intercept)"]
+fixed_slope <- fixef(model)["log_population"]
+
+# Extract estimated random effects
+ranefs_country <- ranef(model)$Country %>%
+  rownames_to_column("Country") %>%
+  rename(ranef_Country = `(Intercept)`)
+
+ranefs_city <- ranef(model)$`Country:Country_City` %>%
+  rownames_to_column("Country_City") %>%
+  rename(ranef_Country_City = `(Intercept)`)
+
+# Calculate the estimated log(mass_avg) from the mixed effect model
+data <- filtered_data %>%
+  mutate(Country_City = paste(Country, ':', Country_City, sep = '')) %>% 
+  left_join(ranefs_country, by = "Country") %>%
+  left_join(ranefs_city, by = c("Country_City" = "Country_City")) %>%
+  mutate(
+    estimated_log_mass_avg = fixed_intercept + fixed_slope * log_population + ranef_Country + ranef_Country_City)
+
+# Create scatter plot comparing estimated and observed log(mass_avg)
+plot_comparison <- ggplot(data, aes(x = log_mass_avg, y = estimated_log_mass_avg)) +
+  geom_point(alpha = 0.5) +
+  geom_abline(slope = 1, intercept = 0, color = "blue", linetype = "dashed") +
+  labs(
+    title = "Scatter Plot of Observed vs. Estimated log(mass_avg)",
+    x = "Observed log(mass_avg)",
+    y = "Estimated log(mass_avg)"
+  ) +
+  theme_minimal()
+
+print(plot_comparison)
+
+# Display model summary
+summary(model)
+
+# Extract country and city intercepts from the model
+country_intercepts <- coef(model)$Country[, "(Intercept)"]
+city_intercepts <- coef(model)$`Country:Country_City`[, "(Intercept)"]
+
+# Create lookup tables for country and city intercepts
+country_lookup <- data.frame(Country = rownames(coef(model)$Country), country_intercept = country_intercepts)
+city_lookup <- data.frame(Country_City = rownames(coef(model)$`Country:Country_City`), city_intercept = city_intercepts)
+
+# Add country and city intercepts to the original data
+data_merged <- data %>%
+  left_join(country_lookup, by = "Country") %>%
+  left_join(city_lookup, by = "Country_City")
+
+# Get the fixed intercept
+fixed_intercept <- fixef(model)["(Intercept)"]
+
+# Construct normalized log(mass_avg)
+data_merged <- data_merged %>%
+  mutate(normalized_log_mass_avg = log_mass_avg + fixed_intercept[[1]] - country_intercept - city_intercept) %>%
+  mutate(city_final_intercept = fixed_intercept[[1]] + ranef_Country + ranef_Country_City) %>%
+  mutate(country_final_intercept = fixed_intercept[[1]] + ranef_Country_City)
+
+```
+
+## Calculate R-squared
+
+Conditional R-squared: This measures the proportion of variance explained by both fixed and random effects, providing a sense of the model's overall fit.
+
+Marginal R-squared: This measures the proportion of variance explained by the fixed effects alone.
+
+```{r}
+r2 <- performance::r2_nakagawa(model)
+print(r2)
+```
+
+
+## Run multiple regressions for individual cities
+
+```{r}
+# Filter cities with more than 10 rows
+cities_with_enough_data <- data %>% 
+  group_by(Country_City) %>% 
+  filter(n() > 10)
+
+# Run regression for each city
+city_models <- cities_with_enough_data %>%
+  group_by(Country_City) %>%
+  group_map(~ lm(log_mass_avg ~ log_population, data = .x))
+
+# Store results
+names(city_models) <- unique(cities_with_enough_data$Country_City)
+
+# Extract fixed effects for each model
+city_fixed_effects <- lapply(city_models, function(model) {
+  list(
+    intercept = coef(model)["(Intercept)"],
+    slope = coef(model)["log_population"]
+  )
+})
+
+# Convert results into a data frame
+city_slope <- do.call(rbind, lapply(names(city_fixed_effects), function(name) {
+  data.frame(
+    City = name,
+    Slope = city_fixed_effects[[name]]$slope
+  )
+}))
+
+city_slope %>% write.csv(
+  file.path("..", "results","global_scaling","city_slope.csv"))
+```
+
+
+## Load H3 hexagon grids of Shanghai and make a map
+
+```{r}
+# Load required libraries
+library(sf)
+library(dplyr)
+library(ggplot2)
+library(viridis)
+library(ggspatial)
+library(cowplot)
+library(ggtext)
+
+# Filter the data for Shanghai
+data_shanghai <- data_merged %>% dplyr::filter(city_id == 12400)
+
+# Filter the data for New York
+data_newyork <- data_merged %>% dplyr::filter(city_id == 945) %>%
+  filter(population > 10)
+
+# Read all cities
+sf_cities <- sf::read_sf(file.path("..","results","shapefiles","all_cities_h3_grids.gpkg")) %>%
+  dplyr::rename(hex_id = h3index)
+
+# Read the Shanghai hexagons shapefile
+# sf_shanghai <- sf::read_sf(file.path("..", "results", "global_scaling", "h3_hexagons_Shanghai.gpkg"))
+sf_shanghai <- sf_cities %>% dplyr::filter(UC_NM_MN == "Shanghai")
+
+# Read the New York hexagons shapefile
+# sf_newyork <- sf::read_sf(file.path("..", "results", "global_scaling", "h3_hexagons_NewYork.gpkg"))
+sf_newyork <- sf_cities %>% dplyr::filter(UC_NM_MN == "New York")
+
+# Join sf_shanghai with data_shanghai
+sf_shanghai <- sf_shanghai %>%
+  left_join(data_shanghai, by = c("hex_id" = "h3index"))
+
+# Join sf_newyork with data_newyork
+sf_newyork <- sf_newyork %>%
+  left_join(data_newyork, by = c("hex_id" = "h3index"))
+
+# Compute the boundary and max hexagon for New York
+ny_boundary <- st_union(sf_newyork)
+max_hex <- sf_newyork %>% filter(log_population == max(log_population, na.rm = TRUE))
+
+# Map using ggplot2 with the viridis palette
+map <- ggplot() +
+  # Add Carto basemap
+  annotation_map_tile(
+    type = "cartolight", # Specify the Carto basemap type
+    zoom = 12            # Adjust zoom level as needed
+  ) +
+  # Add the Shanghai hexagons layer with transparency
+  # geom_sf(data = sf_shanghai, aes(fill = log_population), color = NA, alpha = 0.6) +
+  # Add the New York hexagons layer with transparency
+  geom_sf(data = sf_newyork, aes(fill = pmax(log_population, 3)), color = NA, alpha = 0.6) +
+  geom_sf(data = ny_boundary, color = "#fc8d62", fill = NA, linewidth = 1) +
+  geom_sf(data = max_hex, color = "#bf0000", fill = NA, linewidth = 1) +
+  # Use viridis palette for log_population and remove legend
+  scale_fill_viridis_c(option = "viridis", guide = "none") +
+  # labs(title = "Shanghai") +
+  labs(title = "New York") +
+  # Minimal theme without title or subtitle
+  theme_void() +
+  theme(legend.position = "none")
+
+map
+
+# Scatter plot
+scatter_plot <- ggplot(data_merged, aes(x = 10^log_population, y = 10^normalized_log_mass_avg)) +
+  # geom_point(alpha = 0.3, color = "grey70") +
+  geom_point(alpha = 0.03, color = "#8da0cb") +
+  # geom_point(data = data_shanghai, 
+  #            aes(x = 10^log_population, y = 10^normalized_log_mass_avg, color = log_population)) +
+  geom_point(data = data_newyork, 
+             aes(x = 10^log_population, y = 10^normalized_log_mass_avg, color = pmax(log_population, 3))) +
+  geom_smooth(method = "lm", color = "#bf0000", alpha=0.7, lwd = 0.75) +
+  geom_abline(slope = 0.9, intercept = 0, color = "#fc8d62", alpha=0.7, lwd = 0.75) +
+  geom_abline(slope = 1, intercept = 0, color = "black", linetype = "dashed", lwd = 0.75) +
+  scale_color_viridis_c(option = "viridis", guide = "none") +
+  scale_x_log10(breaks = trans_breaks("log10", function(x) 10^x),
+                labels = trans_format("log10", math_format(10^.x)), limits = c(1, 10^6.5)) +
+  scale_y_log10(breaks = trans_breaks("log10", function(x) 10^x),
+                labels = trans_format("log10", math_format(10^.x)), limits = c(1, 10^5)) +
+  labs(x = "Population (N)", y = "Normalized total built mass (M, tonne)") +
+  theme_bw() +
+  # annotation_logticks() +
+  theme(legend.position = "none",
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        panel.grid.major.y = element_blank(),
+        panel.grid.minor.y = element_blank()) +
+  # Add blue equation in the upper-left corner
+  # geom_richtext(label = "log<sub>10</sub>(M<sub>ij</sub>) = <span style='color:#fc8d62;'>0.89</span> · log<sub>10</sub>(N<sub>ij</sub>)",
+  #               x = 1, y = 10^4.2, hjust = 0, fill = NA, label.color = NA) +
+  # geom_richtext(label = "log<sub>10</sub>(M<sub>ijk</sub>) = <span style='color:#bf0000;'>0.62</span> · log<sub>10</sub>(N<sub>ijk</sub>)",
+  #               x = 1, y = 10^3.8, hjust = 0, fill = NA, label.color = NA)
+  annotate("text", x = 1, y = 10^4.2, label = "log[10](M[ij]) == 0.90 %.% log[10](N[ij])",
+           color = "#fc8d62", parse = TRUE, hjust = 0) +
+  # Add red equation below the blue one
+  annotate("text", x = 1, y = 10^3.8, label = "log[10](M[ijk]) == 0.75 %.% log[10](N[ijk])",
+           color = "#bf0000", parse = TRUE, hjust = 0)
+
+scatter_plot
+
+# Combine the scatter plot and map as an inset
+final_plot <- ggdraw() +
+  draw_plot(scatter_plot) +  # Main scatter plot
+  # draw_plot(map, x = 0.67, y = 0.17, width = 0.35, height = 0.35) # Inset map in lower-right corner
+  draw_plot(map, x = 0.6, y = 0.15, width = 0.35, height = 0.35) # Inset map in lower-right corner
+
+print(final_plot)
+
+
+```
+
+## Make boxplots of countries' and cities' slopes and intercepts
+
+```{r}
+# Load slopes and intercepts
+country_slope <- read.csv(
+  file.path("..", "results","global_scaling","country_inset_slope.csv")) %>%
+  dplyr::select(Country, Slope)
+
+city_slope <- read.csv(
+  file.path("..", "results","global_scaling","city_slope.csv")) %>%
+  dplyr::select(Country_City = City, Slope)
+
+country_inset <- data_merged %>% 
+  dplyr::select(Country, country_final_intercept) %>% 
+  dplyr::group_by(Country) %>% 
+  dplyr::summarise(Intercept = first(country_final_intercept))
+
+city_inset <- data_merged %>% 
+  dplyr::select(Country_City, city_final_intercept, UC_NM_MN) %>% 
+  dplyr::group_by(Country_City) %>% 
+  dplyr::summarise(Intercept = first(city_final_intercept))
+
+# Combine the data for easier plotting
+country_data <- merge(country_slope, country_inset, by="Country") %>%
+  mutate(Type = "Country") %>% dplyr::select(-Country)
+
+city_data <- merge(city_slope, city_inset, by="Country_City") %>%
+  mutate(Type = "City") %>% dplyr::select(-Country_City)
+
+city_data_export <- merge(city_slope, city_inset, by="Country_City")
+city_data_export %>% write_csv(file.path("..", "results","global_scaling","city_inset_slope_2025-07-05.csv"))
+
+combined_data <- bind_rows(country_data, city_data)
+
+# Reshape data for plotting
+combined_long <- combined_data %>%
+  pivot_longer(cols = c("Slope", "Intercept"), names_to = "variable", values_to = "value")
+
+# Reorder the levels of the 'variable' factor to put 'Slope' first
+combined_long$variable <- factor(combined_long$variable, levels = c("Slope", "Intercept"))
+
+# Create the two-panel box plot
+box_plot <- ggplot(combined_long, aes(x = Type, y = value, fill = Type)) +
+  facet_wrap(~ variable, scales = "free", nrow = 2, #ncol = 2, 
+             labeller = as_labeller(c("Slope" = "Slope", "Intercept" = "Intercept"))) +
+  geom_jitter(pch = 21, width = .2, stroke = .3, alpha = .3,
+              show.legend = FALSE) +
+  geom_boxplot(width = .6, alpha = 0.7,
+               outlier.shape = NA, lwd = 0.5, fatten = 1.2,
+               show.legend = FALSE, ) +
+  coord_flip() +
+  scale_fill_manual(values = c("City" = "red", "Country" = "blue")) +
+  # scale_shape_manual(values = c("Slope" = 21, "Intercept" = 22)) +
+  labs(x = "", y = NULL) +
+  theme(strip.background = element_blank(),
+        strip.text = element_text(face = "bold")) +
+  theme_bw()
+
+box_plot
+```
+
+## Boxplot, intercept on log10 scale
+
+```{r}
+# Load required libraries (assumed based on usage)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(cowplot)
+library(scales)
+
+# Convert intercepts back to linear scale (i.e., 10^Intercept)
+# Reshape data for plotting
+combined_long <- combined_data %>%
+  pivot_longer(cols = c("Slope", "Intercept"), names_to = "variable", values_to = "value")
+
+# Reorder the levels of the 'variable' factor to put 'Slope' first
+combined_long$variable <- factor(combined_long$variable, levels = c("Slope", "Intercept"))
+
+# Create the slope box plot (linear scale)
+slope_plot <- ggplot(combined_long %>% filter(variable == "Slope"), aes(x = Type, y = value, fill = Type)) +
+  geom_jitter(pch = 21, width = .2, stroke = .3, alpha = .3, show.legend = FALSE) +
+  geom_boxplot(width = .6, alpha = 0.7, outlier.shape = NA, lwd = 0.5, fatten = 1.2, show.legend = FALSE) +
+  coord_flip() +
+  scale_fill_manual(values = c("City" = "#bf0000", "Country" = "#fc8d62")) +
+  scale_x_discrete(labels = c("City" = "Across-\nneighborhood", "Country" = "Across-city")) +  # Added to change labels
+  labs(x = "", y = "") +
+  ggtitle(expression("Slope " * beta)) +
+  theme_bw() +
+  theme(
+    panel.spacing = unit(0, "npc"),
+    strip.background = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    strip.text = element_text(face = "bold"),
+    plot.title = element_text(hjust = 0.5)
+  )
+
+# Create the intercept box plot (log10 scale)
+intercept_plot <- ggplot(combined_long %>% 
+                           filter(variable == "Intercept"), aes(x = Type, y = 10^value, fill = Type)) +
+  geom_jitter(pch = 23, width = .2, stroke = .3, alpha = .3, show.legend = FALSE) +
+  geom_boxplot(width = .6, alpha = 0.7, outlier.shape = NA, color = "grey25",
+               lwd = 0.5, fatten = 1.2, show.legend = FALSE) +
+  coord_flip() +
+  scale_fill_manual(values = c("City" = "#bf0000", "Country" = "#fc8d62")) +
+  scale_x_discrete(labels = c("City" = "Across-\nneighborhood", "Country" = "Across-city")) +  # Added to change labels
+  scale_y_log10(breaks = trans_breaks("log10", function(x) 10^x),
+                labels = trans_format("log10", math_format(10^.x)),
+                limits = c(10^3, 10^4)) +
+  labs(x = "", y = "") +
+  ggtitle(expression(Intercept ~ M[0] ~ (t/cap^{beta}))) +
+  theme_bw() +
+  theme(
+    panel.spacing = unit(0, "npc"),
+    panel.grid.major.x = element_blank(),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold"),
+    plot.title = element_text(hjust = 0.5)
+  )
+
+# Combine the two plots
+box_plot <- cowplot::plot_grid(slope_plot, intercept_plot, nrow = 2, align = 'h', 
+                               rel_widths = c(1, 1), labels = c("B", "C"))
+
+# Display the combined plot
+print(box_plot)
+```
+
+## Combine scaling scatter plot and boxplots of slopes and intercepts
+
+```{r}
+today_date <- Sys.Date()
+
+# Combine the scatter plot and map as an inset
+scaling_plot <- ggdraw() +
+  draw_plot(scatter_plot) +  # Main scatter plot
+  draw_plot(map, x = 0.67, y = 0.2, width = 0.4, height = 0.4) # Inset map in lower-right corner
+
+# Combine scaling_plot (panel a) with box_plot (panel b)
+combined_plot <- plot_grid(scaling_plot, box_plot, labels = c("A", "B"), ncol = 1)
+
+output_filename <- file.path("..", "figures", paste0("Fig3_Subcity_Scaling_", today_date, ".pdf"))
+
+# Export the figure as a PDF with golden ratio for subplots
+ggsave(output_filename, combined_plot, width = 4*1.618, height = 4*2, units = "in")
+
+print(combined_plot)
+
+# Combine final_plot (panel a) with p (panel b) in a horizontal layout
+combined_plot_horizontal <- plot_grid(final_plot, box_plot, labels = c("A", ""), 
+                                      ncol = 2, nrow = 1,
+                                      rel_widths = c(4 * 1.4, 4/1.1), height = 4)
+
+# Export the horizontal figure as a PDF with specified dimensions
+output_filename <- file.path("..", "figures", paste0("Fig3_Subcity_Scaling_horizontal_", today_date, ".pdf"))
+
+ggsave(output_filename,
+       combined_plot_horizontal, width = (4 * 1.4) + (4/1.1), 
+       height = 4, units = "in")
+
+print(combined_plot_horizontal)
+
+```

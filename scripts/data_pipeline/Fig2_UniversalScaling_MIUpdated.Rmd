@@ -1,0 +1,718 @@
+---
+title: "Fig2_UniversalScaling"
+output: html_notebook:null
+---
+
+input: 
+MasterMass_ByClass20250616.csv (fixed an error from Esch2022， fixed climate code error)
+
+output:
+1. figure 2
+2. Extended data Fig with regression in grid form
+3. A table of country-level status country_summary_table.csv 
+
+```{r}
+rm(list=ls())
+```
+
+# 1. Packges, function, parameters
+```{r}
+# library
+library(pacman)
+p_load(tidyverse,gridGraphics,patchwork,zoo,scales,broom,lme4,cowplot,RColorBrewer,ggrepel)
+```
+
+# 2. Input
+```{r}
+DF_MasterMass <- read.csv("../data/processed/MasterMass_ByClass20250616.csv",stringsAsFactors = FALSE)
+```
+```{r}
+(DF_MasterMass) %>%
+  filter((total_built_mass_tons)<0)
+```
+
+
+# Visualization
+```{r}
+# Panel A: Scatterplot of Population vs MassValue (TotalBuilt, Population > 20000)
+
+# Count the number of such cities per country
+city_counts <- table(DF_MasterMass$CTR_MN_NM)
+# city_counts
+
+# Select countries with at least 5 such cities
+valid_countries <- names(city_counts[city_counts >= 5]) # 75 countries using 5 as cutoff  
+valid_countries
+
+# Filter the full dataset using the valid countries
+data_panel_a <- subset(DF_MasterMass, CTR_MN_NM %in% valid_countries & total_built_mass_tons>0)
+# Mixed effects model: MassValue as Y, Population as fixed effect, Country ID as random effect
+mixed_model <- lmer(log10(total_built_mass_tons) ~ log10(population_2015) + (1 | CTR_MN_NM), data = data_panel_a)
+
+# Extract slope and intercepts
+fixed_effects <- fixef(mixed_model)  # Fixed effects: slope and overall intercept
+random_effects <- ranef(mixed_model)$CTR_MN_NM  # Random intercepts for each country
+
+# Print results
+cat("Fixed Effects:\n")
+print(fixed_effects)
+
+cat("Random Effects (Country-specific intercepts):\n")
+print(random_effects)
+
+summary(mixed_model)
+```
+
+
+```{r}
+# Normalize each country by centralizing them on the same intercept
+# Adjust MassValue for each country to have the same intercept
+mass_per_cap = 200
+common_ylims <- c(1e5, 1e10)
+
+
+random_effects
+normalized_data_panel_a <- data_panel_a
+
+normalized_data_panel_a <- merge(normalized_data_panel_a, random_effects, by.x = "CTR_MN_NM", by.y = "row.names", all.x = TRUE) 
+
+normalized_data_panel_a
+
+colnames(normalized_data_panel_a)[ncol(normalized_data_panel_a)] <- "random_intercept"
+# colnames(normalized_data_panel_a)[ncol(normalized_data_panel_a)] <- "random_intercept"
+
+normalized_data_panel_a$MassValue_normalized <- with(normalized_data_panel_a, 10^(log10(total_built_mass_tons)-random_intercept)) 
+
+normalized_data_panel_a%>%
+  mutate(mass_linear_est = mass_per_cap*population_2015) ->normalized_data_panel_a
+  
+# Create scatterplot for Panel A with normalized MassValue
+plot_normalized <-  ggplot(normalized_data_panel_a,
+                          aes(x = population_2015, y = MassValue_normalized)) +
+  geom_point(
+    shape = 21,
+    color = "black",       # black outline
+    fill = "#8da0cb",      # fill color similar to your reference
+    stroke = 0.3,
+    alpha = 0.5,
+    size = 1.5
+  ) +
+  geom_point(
+  data = subset(normalized_data_panel_a, UC_NM_MN == "New York"),
+  aes(x = population_2015, y = MassValue_normalized),
+  shape = 21,
+  color = "black",
+  fill = "gray",      # Highlight fill color
+  size = 3,           # Bigger circle for emphasis
+  stroke = 0.5        # Slightly thicker outline
+) +
+  stat_smooth(
+    method = "lm",
+    se = FALSE,
+    color = "#fc8d62",
+    fill = "lightblue",
+    size = 0.5,
+    alpha = 0.8  # alpha won't matter much since se=FALSE, but keeps line slightly translucent
+  ) +
+  geom_line(aes(x = population_2015, y = mass_linear_est), linetype=2, linewidth=0.5, color = "black") +
+  # Updated log scales with a small 'expand' for nicer spacing
+  scale_x_log10(
+    name = "Urban population",
+    expand = c(0.02, 0.02),
+    labels = trans_format("log10", math_format(10^.x))
+  ) +
+  scale_y_log10(
+    position = "right",
+    name = "Normalized total built mass (tonnes)",
+    limits = common_ylims,
+    expand = c(0.02, 0.02),
+    labels = trans_format("log10", math_format(10^.x))
+  ) +
+  
+  theme(legend.position = "none") +
+  theme_bw() +
+  theme(
+    # Thin axis ticks
+    axis.ticks = element_line(colour = "black", size = 0.1),
+    # A solid axis line
+    axis.line = element_line(colour = "black", size = 0.5),
+    
+    # Font sizes
+    text = element_text(size = 9),
+    axis.text = element_text(size = 8),
+    
+    # Subtle grid lines on major breaks, remove minor grid
+    panel.grid.major.y = element_line(size = 0.2, color = "grey90", linetype = 2),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor = element_blank(),
+    
+    # Remove the background color in the plotting area
+    panel.background = element_blank()
+  )+ 
+  annotate("text", x = 1e5, y = 10^9.3, size = 3, label = "beta==0.9(n==3587)", parse = TRUE) +
+  annotate("text", x = 1e5, y = 10^9, size = 3, label = "R^2==0.91", parse = TRUE) 
+
+
+plot_normalized
+  
+mod_normalized<-lm(data = normalized_data_panel_a, log10(MassValue_normalized)~log10(population_2015)) # 0.88, same as the results from LM model.
+```
+
+```{r}
+summary(mod_normalized)
+```
+
+```{r}
+# Panel B: Per-capita TotalBuilt Mass vs Population2015
+# Create an extremely minimal theme that only keeps a black border
+theme_inset <- function() {
+  theme_bw(base_size = 7) +
+    theme(
+      # Remove axis titles, tick labels, and tick marks
+      # axis.title = element_blank(),
+      axis.text = element_blank(),
+      axis.ticks = element_blank(),
+      
+      # Remove grid lines
+      panel.grid = element_blank(),
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      
+      # Keep a black outline around the panel, remove background fill
+      panel.border = element_rect(color = "black", fill = NA),
+      
+      # Remove legend
+      legend.position = "none"
+    )
+}
+# Calculate per-capita mass
+data_panel_b <- normalized_data_panel_a
+data_panel_b$PerCapitaMass <- data_panel_b$MassValue_normalized / data_panel_b$population_2015
+
+# Create scatterplot for Panel B
+plot_b <- ggplot(data_panel_b, aes(x = population_2015, y = PerCapitaMass)) +
+  geom_point(pch = 21,alpha = 0.05) +
+  geom_point(
+  data = subset(data_panel_b, UC_NM_MN == "New York"),
+  aes(x = population_2015, y = PerCapitaMass),
+  shape = 21,
+  color = "black",
+  fill = "gray",      # Highlight fill color
+  size = 3,           # Bigger circle for emphasis
+  stroke = 0.5        # Slightly thicker outline
+) +
+  scale_x_log10() +
+  scale_y_log10() +
+  stat_smooth(method = "lm", se = FALSE, color = "#fc8d62", size = 0.5) +
+   geom_hline(yintercept = 200, linetype = 2, color = "black", size = 0.5) +
+ # No xlab or ylab since we want no labels
+  xlab("Urban population") +
+  ylab("Per-cap built mass (t/cap)") +
+  # Apply the minimal inset theme
+  theme_inset()
+
+plot_b
+
+mod_inset<-lm(data = data_panel_b, log10(PerCapitaMass)~log10(population_2015))
+```
+
+```{r}
+summary(mod_inset)
+```
+
+Country-level stats
+```{r}
+# 1. Build country_stats table
+country_stats <- normalized_data_panel_a %>%
+  group_by(CTR_MN_NM) %>%
+  filter(n() >= 5) %>%
+  group_modify(~ {
+    mod <- lm(log10(total_built_mass_tons) ~ log10(population_2015), data = .x)
+    s   <- summary(mod)
+    tibble(
+      n_cities      = nrow(.x),
+      Intercept     = coef(mod)[1],
+      Intercept_SE  = s$coefficients[1, 2],
+      Intercept_t   = 10^coef(mod)[1],
+      Slope         = coef(mod)[2],
+      Slope_SE      = s$coefficients[2, 2],
+      R_squared     = s$r.squared,
+      p_value_slope = s$coefficients[2, 4]
+    )
+  }) %>%
+  ungroup() %>%
+  dplyr::rename(Country = CTR_MN_NM) %>%
+  arrange(desc(n_cities))
+
+# Write out the summary table
+write_csv(country_stats, "../results/global_scaling/country_summary_table.csv")
+country_stats
+# 2. Create full-sample panels
+
+## 2a. Panel for slope distribution
+median_slope <- median(country_stats$Slope, na.rm = TRUE)
+slope_limits <- range(country_stats$Slope, na.rm = TRUE)
+
+panel_slope <- ggplot(country_stats, aes(x = Slope)) +
+  geom_histogram(bins = 21, fill = "gray", color = "black", alpha = 0.7) +
+  geom_vline(xintercept = median_slope, linetype = "solid", color = "#fc8d62", size = 0.8) +
+  geom_vline(xintercept = 1,            linetype = "dashed", color = "black",   size = 0.8) +
+  scale_x_continuous(limits = slope_limits) +
+  theme_bw(base_size = 9) +
+  theme(
+    axis.ticks  = element_blank(),
+    axis.text.y = element_blank(),
+    panel.grid  = element_blank(),
+    plot.margin = margin(0, 0, 0, 0)
+  ) +
+  xlab("Country-specific β") +
+  ylab(NULL)
+
+## 2b. Panel for intercept distribution (on original scale)
+median_intercept_t <- median(country_stats$Intercept_t, na.rm = TRUE)
+intercept_limits <- range(country_stats$Intercept_t, na.rm = TRUE)
+
+panel_intercept <- ggplot(country_stats, aes(x = Intercept_t)) +
+  geom_histogram(bins = 21, fill = "gray", color = "black", alpha = 0.7) +
+  geom_vline(xintercept = median_intercept_t, linetype = "solid", color = "#fc8d62", size = 0.8) +
+  scale_x_log10(
+    limits = intercept_limits,
+    expand = c(0.02, 0.02),
+    labels = trans_format("log10", math_format(10^.x))
+  ) +
+  theme_bw(base_size = 9) +
+  theme(
+    axis.ticks  = element_blank(),
+    axis.text.y = element_blank(),
+    panel.grid  = element_blank(),
+    plot.margin = margin(0, 0, 0, 0)
+  ) +
+  xlab("Country-specific M0 (t / capᵝ)")+
+  ylab(NULL)
+
+## 2c. Panel for R² distribution
+median_r2 <- median(country_stats$R_squared, na.rm = TRUE)
+r2_range   <- range(country_stats$R_squared, na.rm = TRUE)
+r2_buffer  <- diff(r2_range) * 0.05
+r2_limits  <- c(r2_range[1] - r2_buffer, r2_range[2] + r2_buffer)
+
+panel_r2 <- ggplot(country_stats, aes(x = R_squared)) +
+  geom_histogram(bins = 21, fill = "gray", color = "black", alpha = 0.7) +
+  geom_vline(xintercept = median_r2, linetype = "solid", color = "#fc8d62", size = 0.8) +
+  scale_x_continuous(limits = r2_limits) +
+  theme_bw(base_size = 9) +
+  theme(
+    axis.ticks  = element_blank(),
+    axis.text.y = element_blank(),
+    panel.grid  = element_blank(),
+    plot.margin = margin(0, 0, 0, 0)
+  ) +
+  xlab("Country-specific R²") +
+  ylab(NULL)
+
+median_intercept_t
+median_slope
+```
+```{r}
+# 3. Filter out countries with R² < 0.70
+country_stats_highR2 <- country_stats %>%
+  filter(R_squared >= 0.70)
+
+# 4. Create restricted-sample panels
+
+## 4a. Restricted sample slope
+median_slope_excl <- median(country_stats_highR2$Slope, na.rm = TRUE)
+
+panel_slope_excl <- ggplot(country_stats_highR2, aes(x = Slope)) +
+  geom_histogram(bins = 21, fill = "gray", color = "black", alpha = 0.7) +
+  geom_vline(xintercept = median_slope_excl, linetype = "solid", color = "#fc8d62", size = 0.8) +
+  geom_vline(xintercept = 1,                  linetype = "dashed", color = "black",   size = 0.8) +
+  scale_x_continuous(limits = slope_limits) +
+  theme_bw(base_size = 9) +
+  theme(
+    axis.ticks  = element_blank(),
+    axis.text.y = element_blank(),
+    panel.grid  = element_blank(),
+    plot.margin = margin(0, 0, 0, 0)
+  ) +
+  xlab("Country-specific β") +
+  ylab(NULL)
+
+## 4b. Restricted sample intercept
+median_intercept_excl <- median(country_stats_highR2$Intercept_t, na.rm = TRUE)
+
+panel_intercept_excl <- ggplot(country_stats_highR2, aes(x = Intercept_t)) +
+  geom_histogram(bins = 21, fill = "gray", color = "black", alpha = 0.7) +
+  geom_vline(xintercept = median_intercept_excl, linetype = "solid", color = "#fc8d62", size = 0.8) +
+  scale_x_log10(
+    limits = intercept_limits,
+    expand = c(0.02, 0.02),
+    labels = trans_format("log10", math_format(10^.x))
+  ) +
+  theme_bw(base_size = 9) +
+  theme(
+    axis.ticks  = element_blank(),
+    axis.text.y = element_blank(),
+    panel.grid  = element_blank(),
+    plot.margin = margin(0, 0, 0, 0)
+  ) +
+  xlab("Country-specific M0 (t / capᵝ)") +
+  ylab(NULL)
+
+## 4c. Restricted sample R²
+median_r2_excl <- median(country_stats_highR2$R_squared, na.rm = TRUE)
+
+panel_r2_excl <- ggplot(country_stats_highR2, aes(x = R_squared)) +
+  geom_histogram(bins = 21, fill = "gray", color = "black", alpha = 0.7) +
+  geom_vline(xintercept = median_r2_excl, linetype = "solid", color = "#fc8d62", size = 0.8) +
+  scale_x_continuous(limits = r2_limits) +
+  theme_bw(base_size = 9) +
+  theme(
+    axis.ticks  = element_blank(),
+    axis.text.y = element_blank(),
+    panel.grid  = element_blank(),
+    plot.margin = margin(0, 0, 0, 0)
+  ) +
+  xlab("Country-specific R²") +
+  ylab(NULL)
+
+# 5. Combine into a 2×3 layout
+combined_2x3 <- panel_slope       + panel_intercept       + panel_r2 +
+                panel_slope_excl  + panel_intercept_excl  + panel_r2_excl +
+                plot_layout(ncol = 3, nrow = 2, guides = "collect")
+
+# 6. Display the combined figure
+combined_2x3
+# Get the current date
+current_date <- Sys.Date()
+
+
+# ggsave(
+#   filename = paste0("../figures/Fig2_UniversalScaling_CountryStats", current_date, ".pdf"), # Add date to filename
+#   plot = combined_2x3,
+#   device = "pdf",
+#   width = 18,     # Width in cm
+#   height = 10,     # Height in cm
+#   units = "cm",   # Units in centimeters
+#   dpi = 300       # High resolution
+# )
+```
+
+
+# Combined figure 2
+```{r}
+# 1. Create the left patch (stack slope and intercept)
+left_patch <- panel_slope / panel_intercept
+
+# 2. Create the right patch (main plot with inset)
+right_patch <- plot_normalized +
+  inset_element(
+    plot_b,
+    left   = 0.60,  # adjust these coordinates as needed
+    bottom = 0.02,
+    right  = 0.98,
+    top    = 0.4
+  )
+
+# 3. Place them side‐by‐side with | 
+final_plot <- (left_patch|right_patch) +
+  plot_layout(widths = c(2.5, 7.5))  # 
+
+print(final_plot)
+
+# Get the current date
+current_date <- Sys.Date()
+
+# Save the plot with the date in the filename
+# ggsave(
+#   filename = paste0("../figures/Fig2_UniversalScaling_CityLabel", current_date, ".pdf"), # Add date to filename
+#   plot = final_plot,
+#   device = "pdf",
+#   width = 18,     # Width in cm
+#   height = 10,     # Height in cm
+#   units = "cm",   # Units in centimeters
+#   dpi = 300       # High resolution
+# )
+```
+
+
+# With example countries
+
+```{r}
+# top_countries <- names(sort(city_counts, decreasing = TRUE))[1:5]
+top_countries <- c("China", "United States", "India",
+                   "Indonesia")
+
+plot_df <- data_panel_a %>%
+  mutate(
+    CountryGroup = ifelse(
+      CTR_MN_NM %in% top_countries,
+      CTR_MN_NM,
+      "Other"
+    )
+  )
+
+palette5 <- brewer.pal(5, "Set1")
+color_vec <- c(
+  setNames(palette5, top_countries),
+  Other = "grey80"
+)
+
+# 1) Identify the rightmost point per top country, then nudge its x-value by 5%
+label_df <- plot_df %>%
+  filter(CTR_MN_NM %in% top_countries) %>%
+  group_by(CTR_MN_NM) %>%
+  slice_max(population_2015, n = 1) %>%
+  ungroup() %>%
+  mutate(
+    x = population_2015 * 0.95,
+    y = total_built_mass_tons*1.05
+  ) %>%
+  select(Country = CTR_MN_NM, x, y)
+
+ggplot(plot_df, aes(x = population_2015, y = total_built_mass_tons)) +
+  
+  # 2) Background points (all grey)
+  geom_point(
+    shape  = 21,
+    fill   = "grey",
+    color  = "black",
+    stroke = 0.2,
+    alpha  = 0.2,
+    size   = 1.5
+  ) +
+  
+  # 3) Grey regression lines for "Other" countries
+  stat_smooth(
+    data   = filter(plot_df, CountryGroup == "Other"),
+    method = "lm",
+    se     = FALSE,
+    aes(group = CTR_MN_NM),
+    color  = "grey80",
+    size   = 0.3
+  ) +
+  
+  # 4) Colored regression lines for the top 5
+  stat_smooth(
+    data   = filter(plot_df, CountryGroup %in% top_countries),
+    method = "lm",
+    se     = FALSE,
+    aes(group = CTR_MN_NM, color = CountryGroup),
+    size   = 0.7
+  ) +
+  scale_color_manual(
+    values = color_vec,
+    breaks = top_countries
+  ) +
+  
+  # 5) Direct labels using ggrepel, with x already nudged
+  geom_text_repel(
+    data          = label_df,
+    aes(x = x, y = y, label = Country, color = Country),
+    direction     = "y",
+    hjust         = 0,
+    segment.color = NA,
+    size          = 3,
+    show.legend   = FALSE
+  ) +
+  
+  # 6) Log–log scales
+  scale_x_log10(
+    name   = "Urban population",
+    expand = c(0.02, 0.02),
+    labels = scales::trans_format("log10", scales::math_format(10^.x))
+  ) +
+  scale_y_log10(
+    name   = "Total built mass (tonnes)",
+    limits = common_ylims,
+    expand = c(0.02, 0.02),
+    labels = scales::trans_format("log10", scales::math_format(10^.x))
+  ) +
+  
+  # 7) Theme (legend removed)
+  theme_bw() +
+  theme(
+    legend.position    = "none",
+    axis.ticks         = element_line(colour = "black", size = 0.1),
+    axis.line          = element_line(colour = "black", size = 0.5),
+    text               = element_text(size = 9),
+    axis.text          = element_text(size = 8),
+        panel.grid.major.y = element_line(size = 0.2, color = "grey90", linetype = 2),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.background   = element_blank() ) +
+  
+  
+  labs(
+    x = "Urban population",
+    y = "Total built mass (tonnes)"
+  ) -> panel_exampleCountry
+
+# Get the current date
+current_date <- Sys.Date()
+
+panel_exampleCountry
+
+```
+
+
+
+# another composite figure
+```{r}
+# 1) Embed the two insets into EDFig_top5
+panel_A <- panel_exampleCountry +
+  inset_element(panel_slope,
+                left   = 0.25,   bottom = 0.02,
+                right  = 0.6,   top    = 0.32) +
+  inset_element(panel_intercept,
+                left   = 0.64,   bottom = 0.02,
+                right  = 0.99,   top    = 0.32)
+
+# 2) Embed the small per-cap plot into the normalized plot
+panel_B <- plot_normalized +
+  inset_element(plot_b,
+                left   = 0.45,   bottom = 0.02,
+                right  = 0.98,   top    = 0.45)
+
+# 3) Combine A and B side by side, with A a bit narrower
+final_figure <- 
+  (panel_A | panel_B) +
+   plot_layout(ncol = 2, widths = c(7.5, 7.5))
+
+# 4) Draw it
+print(final_figure)
+
+
+
+# Get the current date
+current_date <- Sys.Date()
+
+# Save the plot with the date in the filename
+ggsave(
+  filename = paste0("../figures/Fig2_ExampleAndUniversal", current_date, ".pdf"), # Add date to filename
+  plot = final_figure,
+  device = "pdf",
+  width = 30,     # Width in cm
+  height = 12,     # Height in cm
+  units = "cm",   # Units in centimeters
+  dpi = 300       # High resolution
+)
+```
+
+
+
+
+
+
+```{r}
+ggplot(plot_df, aes(x = population_2015, y = total_built_mass_tons)) +
+  
+  # 2) Background points (all grey)
+  geom_point(
+    shape  = 21,
+    fill   = "grey",
+    color  = "black",
+    stroke = 0.2,
+    alpha  = 0.2,
+    size   = 1.5
+  ) +
+  
+  # 3) Grey regression lines for "Other" countries
+  stat_smooth(
+    data   = filter(plot_df, CountryGroup == "Other"),
+    method = "lm",
+    se     = FALSE,
+    aes(group = CTR_MN_NM),
+    color  = "grey80",
+    size   = 0.3
+  ) +
+  
+  # 4) Colored regression lines for the top 5
+  stat_smooth(
+    data   = filter(plot_df, CountryGroup %in% top_countries),
+    method = "lm",
+    se     = FALSE,
+    aes(group = CTR_MN_NM, color = CountryGroup),
+    size   = 0.7
+  ) +
+  scale_color_manual(
+    values = color_vec,
+    breaks = top_countries
+  ) +
+  # 6) Log–log scales
+  scale_x_log10(
+    name   = "Urban population",
+    expand = c(0.02, 0.02),
+    labels = scales::trans_format("log10", scales::math_format(10^.x))
+  ) +
+  scale_y_log10(
+    name   = "Total built mass (tonnes)",
+    expand = c(0.02, 0.02),
+    labels = scales::trans_format("log10", scales::math_format(10^.x))
+  ) +
+  
+  # 7) Theme (legend removed)
+  theme_bw() +
+  theme(
+    legend.position    = "none",
+    axis.ticks         = element_line(colour = "black", size = 0.1),
+    axis.line          = element_line(colour = "black", size = 0.5),
+    text               = element_text(size = 9),
+    axis.text          = element_text(size = 8),
+    panel.grid.major.y = element_line(size = 0.2, color = "grey99", linetype = 2),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor   = element_blank(),
+    panel.background   = element_blank()
+  ) +
+  
+  labs(
+    x = "Urban population",
+    y = "Total built mass (tonnes)"
+  ) +
+  facet_wrap(~ CTR_MN_NM, ncol = 8) -> EDFig_example_facet
+
+# Get the current date
+current_date <- Sys.Date()
+
+# Save the plot with the date in the filename
+ggsave(
+  filename = paste0("../figures/EDFig_ScalingExample_facet", current_date, ".pdf"), # Add date to filename
+  plot = EDFig_example_facet,
+  device = "pdf",
+  width = 22,     # Width in cm
+  height = 22,     # Height in cm
+  units = "cm",   # Units in centimeters
+  dpi = 300       # High resolution
+)
+
+EDFig_example_facet
+```
+
+
+```{r}
+# Define your four example countries
+example_countries <- c("China", "United States", "India", "Indonesia")
+
+# Subset the already‐computed country_stats and pull out the columns you need
+example_table <- country_stats %>%
+  filter(Country %in% example_countries) %>%
+  # put them in the order you listed
+  slice(match(example_countries, Country)) %>%
+  mutate(
+    Intercept = signif(Intercept, 4),
+    Slope     = signif(Slope,     4),
+    R2        = signif(R_squared,4)
+  ) %>%
+  select(
+    Country,
+    n_cities,
+    Intercept,
+    Slope,
+    R2 = R_squared
+  )
+
+# View or write out
+
+write_csv(example_table, "example_country_stats.csv")
+```
+
