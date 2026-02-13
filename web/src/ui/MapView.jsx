@@ -40,7 +40,6 @@ const MapView = ({ scope, metric, onSelectCountry, onSelectCity }) => {
     map.on('load', async () => {
       // Countries layer
       const cRes = await fetch(`${DATA_BASE}/countries.geojson`)
-      console.log('[MapView] countries.geojson:', cRes.status, cRes.ok)
       if (cRes.ok) {
         const data = await cRes.json()
         map.addSource('countries', { type: 'geojson', data })
@@ -66,7 +65,6 @@ const MapView = ({ scope, metric, onSelectCountry, onSelectCity }) => {
 
       // City points from index
       const metaRes = await fetch(`${DATA_BASE}/index/city_meta.json`)
-      console.log('[MapView] city_meta.json:', metaRes.status, metaRes.ok)
       if (metaRes.ok) {
         const meta = await metaRes.json()
         const features = Object.entries(meta).map(([cityId, m]) => {
@@ -94,7 +92,6 @@ const MapView = ({ scope, metric, onSelectCountry, onSelectCity }) => {
 
       // Country→cities index
       const idxRes = await fetch(`${DATA_BASE}/index/country_to_cities.json`)
-      console.log('[MapView] country_to_cities.json:', idxRes.status, idxRes.ok)
       if (idxRes.ok) setCountryCityCounts(await idxRes.json())
     })
 
