@@ -8,7 +8,7 @@ const COLORS = {
   band: 'rgba(252, 141, 98, 0.18)',
 }
 
-const Scatter = ({ data, reg, mode }) => {
+const Scatter = ({ data, reg, mode, xKey, yKey, xLabel, yLabel, centered }) => {
   const canvasRef = useRef(null)
 
   useEffect(() => {
@@ -31,9 +31,9 @@ const Scatter = ({ data, reg, mode }) => {
       return
     }
 
-    const pad = { top: 12, right: 12, bottom: 28, left: 36 }
-    const xVals = data.map((d) => d.log_pop)
-    const yVals = data.map((d) => d.log_mass)
+    const pad = { top: 12, right: 12, bottom: 28, left: centered ? 42 : 36 }
+    const xVals = data.map((d) => d[xKey])
+    const yVals = data.map((d) => d[yKey])
     const xMin = Math.min(...xVals), xMax = Math.max(...xVals)
     const yMin = Math.min(...yVals), yMax = Math.max(...yVals)
     const pw = W - pad.left - pad.right
@@ -54,39 +54,55 @@ const Scatter = ({ data, reg, mode }) => {
     ctx.fillStyle = '#9a948e'
     ctx.font = '10px DM Sans, system-ui'
     ctx.textAlign = 'center'
-    const xTicks = niceRange(xMin, xMax, 5)
+    const xTicks = centered ? niceRangeCentered(xMin, xMax, 5) : niceRange(xMin, xMax, 5)
     xTicks.forEach((v) => {
       const x = sx(v)
-      ctx.fillText(`10${superscript(v)}`, x, H - pad.bottom + 16)
+      ctx.fillText(centered ? v.toFixed(1) : `10${superscript(v)}`, x, H - pad.bottom + 16)
       ctx.strokeStyle = '#f0ede9'
       ctx.beginPath(); ctx.moveTo(x, pad.top); ctx.lineTo(x, H - pad.bottom); ctx.stroke()
     })
     ctx.textAlign = 'right'
-    const yTicks = niceRange(yMin, yMax, 4)
+    const yTicks = centered ? niceRangeCentered(yMin, yMax, 4) : niceRange(yMin, yMax, 4)
     yTicks.forEach((v) => {
       const y = sy(v)
-      ctx.fillText(`10${superscript(v)}`, pad.left - 6, y + 3)
+      ctx.fillText(centered ? v.toFixed(1) : `10${superscript(v)}`, pad.left - 6, y + 3)
       ctx.strokeStyle = '#f0ede9'
       ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W - pad.right, y); ctx.stroke()
     })
+
+    // Zero lines for centered view
+    if (centered) {
+      ctx.strokeStyle = '#d0cdc8'
+      ctx.lineWidth = 1
+      ctx.setLineDash([4, 3])
+      if (xMin < 0 && xMax > 0) {
+        const zx = sx(0)
+        ctx.beginPath(); ctx.moveTo(zx, pad.top); ctx.lineTo(zx, H - pad.bottom); ctx.stroke()
+      }
+      if (yMin < 0 && yMax > 0) {
+        const zy = sy(0)
+        ctx.beginPath(); ctx.moveTo(pad.left, zy); ctx.lineTo(W - pad.right, zy); ctx.stroke()
+      }
+      ctx.setLineDash([])
+    }
 
     // Axis labels
     ctx.fillStyle = '#6b6560'
     ctx.font = '10px DM Sans, system-ui'
     ctx.textAlign = 'center'
-    ctx.fillText('log\u2081\u2080 Population', pad.left + pw / 2, H - 2)
+    ctx.fillText(xLabel, pad.left + pw / 2, H - 2)
     ctx.save()
     ctx.translate(10, pad.top + ph / 2)
     ctx.rotate(-Math.PI / 2)
-    ctx.fillText('log\u2081\u2080 Built Mass (t)', 0, 0)
+    ctx.fillText(yLabel, 0, 0)
     ctx.restore()
 
     if (mode === 'density') {
       const gw = 120, gh = 90
       const grid = new Uint32Array(gw * gh)
       for (const d of data) {
-        const xi = Math.min(gw - 1, Math.max(0, Math.floor(((d.log_pop - xMin) / (xMax - xMin || 1)) * gw)))
-        const yi = Math.min(gh - 1, Math.max(0, Math.floor(((d.log_mass - yMin) / (yMax - yMin || 1)) * gh)))
+        const xi = Math.min(gw - 1, Math.max(0, Math.floor(((d[xKey] - xMin) / (xMax - xMin || 1)) * gw)))
+        const yi = Math.min(gh - 1, Math.max(0, Math.floor(((d[yKey] - yMin) / (yMax - yMin || 1)) * gh)))
         grid[yi * gw + xi]++
       }
       const max = Math.max(1, ...grid)
@@ -103,7 +119,7 @@ const Scatter = ({ data, reg, mode }) => {
     } else {
       ctx.fillStyle = COLORS.point
       for (const d of data) {
-        ctx.fillRect(sx(d.log_pop) - 1, sy(d.log_mass) - 1, 2.5, 2.5)
+        ctx.fillRect(sx(d[xKey]) - 1, sy(d[yKey]) - 1, 2.5, 2.5)
       }
     }
 
@@ -131,7 +147,7 @@ const Scatter = ({ data, reg, mode }) => {
       ctx.lineTo(sx(L[1].x), sy(L[1].y))
       ctx.stroke()
     }
-  }, [data, reg, mode])
+  }, [data, reg, mode, xKey, yKey, xLabel, yLabel, centered])
 
   return (
     <div className="chart-wrap">
@@ -144,6 +160,9 @@ const CityPanel = ({ scope, onSelectCity, countryName }) => {
   const [data, setData] = useState([])
   const [reg, setReg] = useState(null)
   const [mode, setMode] = useState('density')
+
+  // Global: show de-centered; Country/City: show original
+  const isCentered = scope.level === 'global'
 
   useEffect(() => {
     let cityUrl = `${DATA_BASE}/cities_agg/global.json`
@@ -163,6 +182,11 @@ const CityPanel = ({ scope, onSelectCity, countryName }) => {
   const title = (scope.level === 'country' || scope.level === 'city')
     ? `Cities in ${countryName || scope.iso}`
     : 'All Cities'
+
+  const xKey = isCentered ? 'log_pop_c' : 'log_pop'
+  const yKey = isCentered ? 'log_mass_c' : 'log_mass'
+  const xLabel = isCentered ? '\u0394 log\u2081\u2080 Population' : 'log\u2081\u2080 Population'
+  const yLabel = isCentered ? '\u0394 log\u2081\u2080 Built Mass' : 'log\u2081\u2080 Built Mass (t)'
 
   return (
     <>
@@ -186,7 +210,7 @@ const CityPanel = ({ scope, onSelectCity, countryName }) => {
           </div>
         )}
       </div>
-      <Scatter data={data} reg={reg} mode={mode} />
+      <Scatter data={data} reg={reg} mode={mode} xKey={xKey} yKey={yKey} xLabel={xLabel} yLabel={yLabel} centered={isCentered} />
       <div className="stat-row">
         {reg && isFinite(reg.slope) && (
           <>
@@ -223,6 +247,18 @@ function niceRange(lo, hi, count) {
   const start = Math.ceil(lo)
   const ticks = []
   for (let v = start; v <= hi; v += Math.max(1, step)) ticks.push(v)
+  return ticks
+}
+
+function niceRangeCentered(lo, hi, count) {
+  const range = hi - lo
+  const rawStep = range / count
+  const mag = Math.pow(10, Math.floor(Math.log10(rawStep)))
+  const steps = [1, 2, 5, 10]
+  const step = steps.find((s) => s * mag >= rawStep) * mag || rawStep
+  const start = Math.ceil(lo / step) * step
+  const ticks = []
+  for (let v = start; v <= hi + step * 0.01; v += step) ticks.push(Math.round(v / step) * step)
   return ticks
 }
 
