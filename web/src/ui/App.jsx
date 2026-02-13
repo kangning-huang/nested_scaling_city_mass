@@ -30,44 +30,45 @@ const App = () => {
 
   return (
     <div className="app-layout">
-      <div className="panel panel-left">
-        <div className="site-header">
-          <div className="site-title">Nested Scaling of Urban Material Stocks</div>
-          <div className="site-subtitle">Population-mass scaling across cities and neighborhoods — <a href="https://arxiv.org/abs/2507.03960" target="_blank" rel="noopener noreferrer">arXiv:2507.03960</a></div>
-          <div className="breadcrumbs">
-            <span className={`crumb${scope.level === 'global' ? ' active' : ''}`} onClick={onReset}>Global</span>
-            {scope.level !== 'global' && (
-              <>
-                <span className="sep">/</span>
-                <span className={`crumb${scope.level === 'country' ? ' active' : ''}`} onClick={onResetToCountry}>
-                  {countryName || scope.iso}
-                </span>
-              </>
-            )}
-            {scope.level === 'city' && (
-              <>
-                <span className="sep">/</span>
-                <span className="crumb active">{cityName}</span>
-              </>
-            )}
-          </div>
-        </div>
-        <div className="controls-bar">
-          <span className="control-label">Map metric</span>
-          <div className="toggle-group">
-            <button onClick={() => setMetric('mass')} disabled={metric === 'mass'}>Built Mass</button>
-            <button onClick={() => setMetric('pop')} disabled={metric === 'pop'}>Population</button>
-          </div>
-        </div>
-        <div className="section">
-          <CityPanel scope={scope} onSelectCity={onSelectCity} countryName={countryName} />
-        </div>
-      </div>
-
       <MapView scope={scope} metric={metric} onSelectCountry={onSelectCountry} onSelectCity={onSelectCity} />
 
       <div className="panel panel-right">
-        <div className="section">
+        <div className="site-header">
+          <div className="site-title">Nested Scaling of Urban Material Stocks</div>
+          <div className="site-subtitle">Population-mass scaling across cities and neighborhoods — <a href="https://arxiv.org/abs/2507.03960" target="_blank" rel="noopener noreferrer">arXiv:2507.03960</a></div>
+          <div className="header-row">
+            <div className="breadcrumbs">
+              <span className={`crumb${scope.level === 'global' ? ' active' : ''}`} onClick={onReset}>Global</span>
+              {scope.level !== 'global' && (
+                <>
+                  <span className="sep">/</span>
+                  <span className={`crumb${scope.level === 'country' ? ' active' : ''}`} onClick={onResetToCountry}>
+                    {countryName || scope.iso}
+                  </span>
+                </>
+              )}
+              {scope.level === 'city' && (
+                <>
+                  <span className="sep">/</span>
+                  <span className="crumb active">{cityName}</span>
+                </>
+              )}
+            </div>
+            <div className="controls-bar">
+              <span className="control-label">Map</span>
+              <div className="toggle-group">
+                <button onClick={() => setMetric('mass')} disabled={metric === 'mass'}>Mass</button>
+                <button onClick={() => setMetric('pop')} disabled={metric === 'pop'}>Pop</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="section section-city">
+          <CityPanel scope={scope} onSelectCity={onSelectCity} countryName={countryName} />
+        </div>
+        <div className="section-divider" />
+        <div className="section section-neigh">
           <NeighborhoodPanel scope={scope} cityName={cityName} countryName={countryName} />
         </div>
       </div>
