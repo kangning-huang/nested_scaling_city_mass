@@ -160,6 +160,7 @@ const CityPanel = ({ scope, onSelectCity, countryName }) => {
   const [data, setData] = useState([])
   const [reg, setReg] = useState(null)
   const [mode, setMode] = useState('density')
+  const [debugInfo, setDebugInfo] = useState('loading...')
 
   // Global: show de-centered; Country/City: show original
   const isCentered = scope.level === 'global'
@@ -171,12 +172,23 @@ const CityPanel = ({ scope, onSelectCity, countryName }) => {
       cityUrl = `${DATA_BASE}/cities_agg/country=${scope.iso}.json`
       regUrl = `${DATA_BASE}/regression/country/${scope.iso}.json`
     }
+    setDebugInfo(`fetching ${cityUrl}...`)
     Promise.all([fetch(cityUrl), fetch(regUrl)]).then(async ([cRes, rRes]) => {
-      if (cRes.ok) setData(await cRes.json())
-      else setData([])
+      if (cRes.ok) {
+        const parsed = await cRes.json()
+        setDebugInfo(`OK: ${cRes.status}, ${Array.isArray(parsed) ? parsed.length : typeof parsed} items from ${cityUrl}`)
+        setData(parsed)
+      } else {
+        setDebugInfo(`FAIL: HTTP ${cRes.status} from ${cityUrl}`)
+        setData([])
+      }
       if (rRes.ok) setReg(await rRes.json())
       else setReg(null)
-    }).catch(() => { setData([]); setReg(null) })
+    }).catch((err) => {
+      setDebugInfo(`ERROR: ${err.message} fetching ${cityUrl}`)
+      setData([])
+      setReg(null)
+    })
   }, [scope])
 
   const title = (scope.level === 'country' || scope.level === 'city')
@@ -194,6 +206,7 @@ const CityPanel = ({ scope, onSelectCity, countryName }) => {
         {title}
         <span className="badge city">City scale</span>
       </div>
+      <div style={{ fontSize: 9, color: '#999', padding: '2px 0', fontFamily: 'monospace' }}>{debugInfo}</div>
       <div className="chart-controls">
         <span className="control-label">View</span>
         <div className="toggle-group">
