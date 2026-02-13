@@ -4,7 +4,7 @@ Status
 - This project accompanies our manuscript on nested scaling relationships of population and built environment mass across cities and neighborhoods.
 - The paper is currently under review / in revision at Nature Cities.
 - Preprint: [arXiv:2507.03960](https://arxiv.org/abs/2507.03960)
-- Live site: https://kangning-huang.github.io/nested_scaling_city_mass/
+- Live site: https://kangning-huang.github.io/nested-scaling-city-mass/
 
 Key Analyses (implemented in scripts and used to power the site)
 - City-level scaling: log–log scaling between total built mass and population across cities using decentered regression (store slope, mean log-pop, mean log-mass, and counts).
@@ -27,14 +27,13 @@ How the Website Is Constructed
 Local Development
 1) `cd web && npm ci`
 2) Set env var `VITE_MAPTILER_KEY` (free MapTiler key)
-3) (Optional) If you need local data, run `bash ../scripts/unzip_webdata.sh` **only in CI or a throwaway workspace**; avoid unzipping locally to keep Drive fast.
-4) `npm run dev`
+3) `npm run dev`
 
 Deployment (GitHub Pages)
-- Workflow in `.github/workflows/deploy.yml` builds from `web/` and publishes to `gh-pages`, expanding `web/public/webdata/*.zip` via `scripts/unzip_webdata.sh`.
-- A lightweight workflow `.github/workflows/unzip-webdata.yml` runs on every push to ensure archives can be expanded in CI (no local unzipping needed).
+- Workflow in `.github/workflows/deploy.yml` builds from `web/` and publishes to `gh-pages`.
+- Data files in `web/public/webdata/` are committed directly (no ZIP extraction needed).
 - Set repo secret `MAPTILER_KEY` with your MapTiler key.
-- Push to `main` (or `master`) to deploy. Pages URL: `https://<user>.github.io/<repo>/` (live at https://kangning-huang.github.io/nested_scaling_city_mass/).
+- Push to `main` (or `master`) to deploy. Pages URL: https://kangning-huang.github.io/nested-scaling-city-mass/
 
 Version-Controlled Folders
 - `web/`: the web app (source + public webdata artifacts)
