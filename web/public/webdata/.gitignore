@@ -1,7 +1,3 @@
-# Keep archives, ignore expanded contents
-*
-!/.gitignore
-!*.zip
-!countries.geojson
-!hex/
-!hex/.gitignore
+# Ignore macOS metadata
+__MACOSX/
+.DS_Store
