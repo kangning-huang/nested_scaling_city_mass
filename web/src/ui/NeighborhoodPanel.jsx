@@ -98,7 +98,7 @@ const Scatter = ({ data, reg, mode, xKey, yKey, xLabel, yLabel, centered, chartC
 
     // Data
     const densityFn = cc.neighDensity || ((v) => `rgba(141,160,203,${Math.min(0.92, 0.03+v*0.89)})`)
-    const pointColor = cc.neighPoint || 'rgba(141,160,203,0.03)'
+    const pointColor = cc.neighPoint || 'rgba(141,160,203,0.4)'
 
     if (mode === 'density') {
       const gw = 120, gh = 90

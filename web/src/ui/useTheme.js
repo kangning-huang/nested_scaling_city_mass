@@ -15,7 +15,7 @@ const LIGHT = {
   cityLine: '#e07030',
   cityBand: 'rgba(224, 112, 48, 0.15)',
   // Neighborhood scatter
-  neighPoint: 'rgba(141, 160, 203, 0.03)',
+  neighPoint: 'rgba(141, 160, 203, 0.4)',
   neighDensity: (v) => `rgba(80, 100, 170, ${Math.min(0.92, 0.03 + v * 0.89)})`,
   neighLine: '#bf0000',
   neighBand: 'rgba(191, 0, 0, 0.15)',
@@ -36,7 +36,7 @@ const DARK = {
   cityLine: '#f09050',
   cityBand: 'rgba(240, 144, 80, 0.2)',
   // Neighborhood scatter
-  neighPoint: 'rgba(160, 180, 230, 0.06)',
+  neighPoint: 'rgba(160, 180, 230, 0.45)',
   neighDensity: (v) => `rgba(130, 160, 230, ${Math.min(0.92, 0.03 + v * 0.89)})`,
   neighLine: '#e04040',
   neighBand: 'rgba(224, 64, 64, 0.2)',
