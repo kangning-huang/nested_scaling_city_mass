@@ -36,7 +36,7 @@ const App = () => {
       <div className="panel panel-right">
         <div className="site-header">
           <div className="site-title">Nested Scaling of Urban Material Stocks</div>
-          <div className="site-subtitle">Kangning Huang (NYU Shanghai, <a href="mailto:kh3657@nyu.edu">kh3657@nyu.edu</a>) &amp; Mingzhen Lu (NYU, <a href="mailto:ml9120@nyu.edu">ml9120@nyu.edu</a>)</div>
+          <div className="site-subtitle"><a href="https://kangning-huang.github.io/main/" target="_blank" rel="noopener noreferrer">Kangning Huang</a> (NYU Shanghai, <a href="mailto:kh3657@nyu.edu">kh3657@nyu.edu</a>) &amp; <a href="https://www.mingzhenlu-lab.com" target="_blank" rel="noopener noreferrer">Mingzhen Lu</a> (NYU, <a href="mailto:ml9120@nyu.edu">ml9120@nyu.edu</a>)</div>
           <div className="site-subtitle">Urban material stocks scale sublinearly with population at both city and neighborhood levels, revealing a universal pattern of resource efficiency in larger urban systems. <a href="https://arxiv.org/abs/2507.03960" target="_blank" rel="noopener noreferrer">Read the preprint &rarr;</a> &middot; <a href="https://github.com/kangning-huang/nested-scaling-city-mass" target="_blank" rel="noopener noreferrer">View on GitHub &rarr;</a></div>
           <div className="header-row">
             <div className="breadcrumbs">
