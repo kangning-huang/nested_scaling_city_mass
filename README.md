@@ -23,28 +23,81 @@ The two exponents are statistically distinct (z = 39.1, p < 0.001), with confide
 ## Repository Structure
 
 ```
-nested_scaling_city_mass/
+nested-scaling-city-mass/
 ├── scripts/
-│   ├── data_pipeline/           # Full data processing pipeline (GEE → mass → figures)
-│   │   ├── 01_create_h3_grids.py
+│   ├── data_pipeline/                    # Full data processing pipeline (GEE → mass → figures)
+│   │   ├── 01_create_h3_grids.py         # Generate H3 hexagonal grids for cities
+│   │   ├── 01b_create_h3_grids_nudged.py # Shifted grids for MAUP sensitivity
 │   │   ├── 02_extract_roads_neighborhood.py
-│   │   ├── 03a_submit_batch_exports.py
+│   │   ├── 02b_extract_roads_clean.py    # Improved road extraction with lane widths
+│   │   ├── 03_extract_volume_pavement.py # Single-city extraction (synchronous)
+│   │   ├── 03_run_extraction.py          # Dispatcher for extraction approaches
+│   │   ├── 03a_submit_batch_exports.py   # GEE batch export submission
+│   │   ├── 03a_submit_batch_exports_nudged.py
+│   │   ├── 03b_monitor_batch_tasks.py    # Monitor GEE task completion
+│   │   ├── 03c_download_batch_results.py # Download and merge GEE results
 │   │   ├── 04_merge_building_road_data.py
 │   │   ├── 05_prep_global_mass_neighborhood.py
-│   │   ├── Fig1_*.Rmd / Fig2_*.Rmd / Fig3_*.Rmd
-│   │   ├── 06–10_*.py           # Zipf, simulation, Fig 4
-│   │   ├── sensitivity/         # Original mixed-effects sensitivity analyses
-│   │   └── utils/               # Shared path utilities
-│   └── scaling_analysis/        # Revised scaling analysis (de-centering approach)
-│       ├── Fig2_*.R             # City-level scaling + sensitivity
-│       ├── Fig3_*.R             # Neighborhood-level scaling + sensitivity
+│   │   ├── 06_estimate_neighborhood_zipf.py
+│   │   ├── 07_simulate_scaling.py        # Monte Carlo: δ + Zipf s → β
+│   │   ├── 08_compare_beta_boxplot.py
+│   │   ├── 09_generate_fig3.Rmd          # Neighborhood scaling figure
+│   │   ├── 09b_compare_scaling_resolutions.R
+│   │   ├── 09c_multiresolution_scaling_analysis.R
+│   │   ├── 10_generate_fig4.py           # Figure 4 assembly
+│   │   ├── Fig1_*.Rmd                    # Figure 1 data prep and assembly
+│   │   ├── Fig2_UniversalScaling_MIUpdated.Rmd
+│   │   ├── Fig3_NeighborhoodScaling_UpdateMI.Rmd
+│   │   ├── process_santa_fe.py           # Santa Fe city data pipeline
+│   │   ├── extract_santa_fe_gba_mi.py    # GBA building-level MI extraction
+│   │   ├── validate_h3_hierarchical_consistency.py
+│   │   ├── sensitivity/                  # Original mixed-effects sensitivity analyses
+│   │   │   ├── 05_sensitivity_random_datasource.R
+│   │   │   ├── 06_weighted_reliability_means.R
+│   │   │   ├── 07_MI_sensitivity_3tier.R
+│   │   │   └── calculate_CI_exact_reproduction.py
+│   │   └── utils/                        # Shared path utilities
+│   │       └── paths.py
+│   └── scaling_analysis/                 # Revised scaling analysis (de-centering approach)
+│       ├── Fig2_UniversalScaling_Decentered.R
+│       ├── Fig2_*_MI_sensitivity.R       # City-level MI sensitivity
+│       ├── Fig2_*_Source_Sensitivity.R   # City-level data source sensitivity
+│       ├── Fig2_*_Weighted_Source.R      # Reliability-weighted averaging
+│       ├── Fig2_*_WithSubwayMass.R       # Including underground infrastructure
+│       ├── Fig3_NeighborhoodScaling_Decentered.R
+│       ├── Fig3_*_Multiscale*.R          # H3 R5/R6/R7 resolution tests
+│       ├── Fig3_*_NudgeSensitivity.R     # Grid placement sensitivity
+│       ├── Fig3_*_R7*.R                  # Resolution 7 specific analyses
+│       ├── Fig3_ExtendedData_CityLines.R # Extended data: all city regression lines
+│       ├── Fig3_R7_city_candidates*.R    # Per-city slope analysis
 │       ├── extract_subway_mass_by_hexagon.py
-│       ├── test_zipf_vs_lognormal.py
+│       ├── osm_subway_download.py        # Download subway networks from OSM
+│       ├── test_zipf_vs_lognormal.py     # Distribution tests
 │       ├── test_rank_correlation.py
-│       └── web_prep/            # Scripts to prepare data for the interactive website
-├── web/                         # Interactive web explorer (React + MapLibre + deck.gl)
-├── config/                      # Path configuration for multi-environment support
-└── tests/                       # Pipeline tests
+│       ├── US_subset_scaling_Frantz_comparison.py
+│       ├── export_pop_lt_1_neighborhoods.R
+│       └── web_prep/                     # Scripts to prepare data for the website
+│           ├── prep_city_aggregates.py
+│           ├── prep_neighborhood_subsamples.py
+│           ├── compute_regressions.py
+│           ├── split_city_hex_feeds.py
+│           ├── download_countries_geojson.py
+│           └── pack_hex_to_zip.py
+├── data/                                 # Data files (not tracked in git)
+│   └── processed/
+│       └── h3_resolution{N}/             # Processed H3 hexagon data by resolution
+├── web/                                  # Interactive web explorer
+│   ├── src/                              # React + MapLibre + deck.gl frontend
+│   ├── public/webdata/                   # Static JSON data for the website
+│   │   ├── cities_agg/                   # City-level aggregates by country
+│   │   ├── hex/                          # Per-city H3 hexagon feeds
+│   │   ├── regression/                   # OLS regression parameters
+│   │   ├── scatter_samples/              # Subsampled scatter plot data
+│   │   └── index/                        # City metadata and search indices
+│   └── scripts/                          # Data processing utilities
+├── config/                               # Path configuration for multi-environment support
+└── tests/
+    └── pipeline_tests/                   # Pipeline validation tests
 ```
 
 ---
